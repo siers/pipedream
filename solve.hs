@@ -52,7 +52,7 @@ parse =
   . lines
 
 render :: Maze -> String
-render = unlines . map (map (mapChar !)) . Mx.toLists
+render = unlines . map (map ((mapChar !) . sort)) . Mx.toLists
 
 verifyPixelModel = (pixs ==) . last $
   [ map (idLookup . rotateC) pixs
@@ -74,7 +74,7 @@ rotateDir n = (`mod` 4) . (+ n)
 flipDir = rotateDir 2
 
 rotate :: Rotation -> Pix -> Pix
-rotate n = sort . map (rotateDir n)
+rotate n = map (rotateDir n)
 
 opposite = 2
 
@@ -120,18 +120,20 @@ solve input = do
     solve_ cur@(x, y) maze = do
       rotation <- directions
 
-      if pixValid maze cur rotation
+      if trace (show (x, y, rotation, nextCur cur maze)) pixValid maze cur rotation
       then
         (if x == ncols maze && y == nrows maze
         then [nextMaze rotation]
-        else nextCur cur maze >>= \cur -> solve_ cur (nextMaze rotation))
+        else solve_ (nextCur cur maze) (nextMaze rotation))
       else []
 
       where
         nextMaze rot = implementRotate cur rot maze
 
-    nextCur (x, y) maze =
-      [((x `mod` ncols maze) + 1, y + (if x == ncols maze then 1 else 0))]
+    nextCur (x, y) maze = (x_, y_)
+      where
+        x_ = (x `mod` ncols maze) + 1
+        y_ = y + (if x_ == 1 then 1 else 0)
 
 main = do
   pure verifyPixelModel
