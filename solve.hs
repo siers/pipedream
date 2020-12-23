@@ -79,7 +79,7 @@ rotate n = sort . map (rotateDir n)
 opposite = 2
 
 implementRotate :: Cursor -> Rotation -> Maze -> Maze
-implementRotate cur@(x, y) rot maze = Mx.setElem (rotate rot $ Mx.getElem x y maze) cur maze
+implementRotate cur@(x, y) rot maze = Mx.setElem (rotate rot $ Mx.getElem y x maze) (y, x) maze
 
 -- [Cursor] should be a set
 -- pixSolutions :: Maze -> -> Int -> Int -> [Rotation]
@@ -88,33 +88,34 @@ implementRotate cur@(x, y) rot maze = Mx.setElem (rotate rot $ Mx.getElem x y ma
 -- given top and left pix is solved, verify this pix is valid after rotation
 pixValid :: Maze -> Cursor -> Rotation -> Bool
 pixValid maze cur@(x, y) rot = flip all directions $ \d ->
-    trace (show (d, "//", filterD d thisRequires, "==", filterD d (thatHas d))) $
-    filterD d thisRequires == filterD d (thatHas d)
+    trace (show (d, "//", filterD d (thisRequires d), "==", filterD d (thatRequires d))) $
+    filterD d (thisRequires d) == filterD d (thatRequires d)
   where
     filterD d = filter (flipDir d ==)
-    thisRequires = (rot + opposite) `rotate` (Mx.getElem x y maze)
 
     curN :: Direction -> Cursor
-    curN 0 = (x, y - 1)
-    curN 1 = (x + 1, y)
-    curN 2 = (x, y + 1)
-    curN 3 = (x - 1, y)
+    curN 0 = (y - 1, x)
+    curN 1 = (y, x + 1)
+    curN 2 = (y + 1, x)
+    curN 3 = (y, x - 1)
 
-    thatHas :: Direction -> Pix
-    thatHas n =
-      if (n == 1 || n == 2) && (x <= ncols maze || y <= Mx.nrows maze)
-      then directions
-      else [] `fromMaybe` uncurry Mx.safeGet (curN n) maze
+    futureValidated d = (d == 1 || d == 2) && (y <= ncols maze || x <= Mx.nrows maze)
 
-    default_ :: Cursor -> Pix
-    default_ (x, y) =
-      if (x `min` y < 1) || x > ncols maze || y > Mx.nrows maze
+    thisRequires :: Direction -> Pix
+    thisRequires d =
+      if futureValidated d
       then []
-      else directions
+      else (rot + opposite) `rotate` (Mx.getElem y x maze)
+
+    thatRequires :: Direction -> Pix
+    thatRequires d =
+      if futureValidated d
+      then []
+      else [] `fromMaybe` uncurry Mx.safeGet (curN d) maze
 
 solve :: Maze -> [Maze]
 solve input = do
-  take 2 $ solve_ (1, 1) input
+  take 1 $ solve_ (1, 1) input
   where
     solve_ :: Cursor -> Maze -> [Maze]
     solve_ cur@(x, y) maze = do
