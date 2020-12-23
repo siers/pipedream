@@ -1,0 +1,2 @@
+get samples
+  (echo -e 'get samplesnew 6\nmap'; sleep 10) | ws ws://hometask.eg1236.com/game-pipes/ > samples/6
