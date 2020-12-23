@@ -89,19 +89,16 @@ implementRotate cur@(x, y) rot maze = Mx.setElem (rotate rot $ Mx.getElem y x ma
 pixValid :: Maze -> Cursor -> Rotation -> Bool
 pixValid maze cur@(x, y) rot = all validateDirection directions
   where
-    validateDirection d =
-      trace (show (d, rot, "//", filter (flipDir d ==) thisRequires, filter (flipDir d ==) thatRequires)) $
-      filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
-
+    validateDirection d = filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
       where
         -- square in that direction does not have its final value yet
-        directionUncertain = (d == 1 || d == 2) && (y < nrows maze || x < ncols maze)
+        directionUncertain = (d == 1 && x < ncols maze) || (d == 2 && y < nrows maze)
 
         thisRequires :: Pix
-        thisRequires = t $
+        thisRequires =
           if directionUncertain
           then []
-          else (rot + opposite) `rotate` (trace (show ("piece", Mx.getElem y x maze)) $ Mx.getElem y x maze)
+          else (rot + opposite) `rotate` (Mx.getElem y x maze)
 
         thatRequires :: Pix
         thatRequires =
@@ -123,7 +120,7 @@ solve input = do
     solve_ cur@(x, y) maze = do
       rotation <- directions
 
-      if trace ((show $ ("solve", x, y, rotation)) ++ ((mapChar ! (Mx.getElem y x maze)) : [])) pixValid maze cur rotation
+      if pixValid maze cur rotation
       then
         (if x == ncols maze && y == nrows maze
         then [nextMaze rotation]
@@ -139,7 +136,7 @@ solve input = do
 main = do
   pure verifyPixelModel
   input <- getContents
-  putStrLn "input"
-  putStrLn . render . parse $ input
-  putStrLn "solve"
+  -- putStrLn "input"
+  -- putStrLn . render . parse $ input
+  -- putStrLn "solve"
   mapM_ putStrLn . map render . solve . parse $ input
