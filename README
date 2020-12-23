@@ -1,0 +1,2 @@
+get samples
+  (echo -e 'get samplesnew 6\nmap'; sleep 10) | ws ws://maze.server.host/game-pipes/ > samples/6
