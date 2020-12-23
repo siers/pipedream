@@ -87,31 +87,33 @@ implementRotate cur@(x, y) rot maze = Mx.setElem (rotate rot $ Mx.getElem y x ma
 
 -- given top and left pix is solved, verify this pix is valid after rotation
 pixValid :: Maze -> Cursor -> Rotation -> Bool
-pixValid maze cur@(x, y) rot = flip all directions $ \d ->
-    trace (show (d, "//", filterD d (thisRequires d), "==", filterD d (thatRequires d))) $
-    filterD d (thisRequires d) == filterD d (thatRequires d)
+pixValid maze cur@(x, y) rot = all validateDirection directions
   where
-    filterD d = filter (flipDir d ==)
+    validateDirection d =
+      trace (show (d, rot, "//", filter (flipDir d ==) thisRequires, filter (flipDir d ==) thatRequires)) $
+      filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
 
-    curN :: Direction -> Cursor
-    curN 0 = (y - 1, x)
-    curN 1 = (y, x + 1)
-    curN 2 = (y + 1, x)
-    curN 3 = (y, x - 1)
+      where
+        -- square in that direction does not have its final value yet
+        directionUncertain = (d == 1 || d == 2) && (y < nrows maze || x < ncols maze)
 
-    futureValidated d = (d == 1 || d == 2) && (y <= ncols maze || x <= Mx.nrows maze)
+        thisRequires :: Pix
+        thisRequires = t $
+          if directionUncertain
+          then []
+          else (rot + opposite) `rotate` (trace (show ("piece", Mx.getElem y x maze)) $ Mx.getElem y x maze)
 
-    thisRequires :: Direction -> Pix
-    thisRequires d =
-      if futureValidated d
-      then []
-      else (rot + opposite) `rotate` (Mx.getElem y x maze)
-
-    thatRequires :: Direction -> Pix
-    thatRequires d =
-      if futureValidated d
-      then []
-      else [] `fromMaybe` uncurry Mx.safeGet (curN d) maze
+        thatRequires :: Pix
+        thatRequires =
+          if directionUncertain
+          then []
+          else [] `fromMaybe` uncurry Mx.safeGet (curN d) maze
+          where
+            curN :: Direction -> Cursor
+            curN 0 = (y - 1, x)
+            curN 1 = (y, x + 1)
+            curN 2 = (y + 1, x)
+            curN 3 = (y, x - 1)
 
 solve :: Maze -> [Maze]
 solve input = do
@@ -121,7 +123,7 @@ solve input = do
     solve_ cur@(x, y) maze = do
       rotation <- directions
 
-      if trace (show $ (x, y, rotation)) pixValid maze cur rotation
+      if trace ((show $ ("solve", x, y, rotation)) ++ ((mapChar ! (Mx.getElem y x maze)) : [])) pixValid maze cur rotation
       then
         (if x == ncols maze && y == nrows maze
         then [nextMaze rotation]
@@ -133,13 +135,6 @@ solve input = do
 
     nextCur (x, y) maze =
       [((x `mod` ncols maze) + 1, y + (if x == ncols maze then 1 else 0))]
-
--- Varbūt noderēs
--- solve = id
-
-probe maze = pixValid maze (1, 1) 3
-
-change maze = Mx.setElem (rotate (-1) $ Mx.getElem 1 1 maze) (1, 1) maze
 
 main = do
   pure verifyPixelModel
