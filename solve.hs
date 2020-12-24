@@ -81,10 +81,6 @@ opposite = 2
 implementRotate :: Cursor -> Rotation -> Maze -> Maze
 implementRotate cur@(x, y) rot maze = Mx.setElem (rotate rot $ Mx.getElem y x maze) (y, x) maze
 
--- [Cursor] should be a set
--- pixSolutions :: Maze -> -> Int -> Int -> [Rotation]
--- pixSolutions maze visited x y = []
-
 -- given top and left pix is solved, verify this pix is valid after rotation
 pixValid :: Maze -> Cursor -> Rotation -> Bool
 pixValid maze cur@(x, y) rot = all validateDirection directions
@@ -112,24 +108,28 @@ pixValid maze cur@(x, y) rot = all validateDirection directions
             curN 2 = (y + 1, x)
             curN 3 = (y, x - 1)
 
-solve :: Maze -> [Maze]
-solve input = do
-  take 1 $ solve_ (1, 1) input
+solve :: Maze -> (Maze, [(Int, Int)])
+solve input =
+  (maze, reverse rotations >>= (\(x, y, r) -> take r (repeat (x, y))))
   where
-    solve_ :: Cursor -> Maze -> [Maze]
-    solve_ cur@(x, y) maze = do
+    (maze, rotations) = head $ solve_ (1, 1) [] input
+
+    solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [(Int, Int, Int)])]
+    solve_ cur@(x, y) path maze = do
       rotation <- directions
 
       if pixValid maze cur rotation
       -- if trace (show (x, y, rotation, nextCur cur maze)) pixValid maze cur rotation
       then
         (if x == ncols maze && y == nrows maze
-        then [nextMaze rotation]
-        else solve_ (nextCur cur maze) (trace ("\x1b[H\x1b[2J" ++ (render (nextMaze rotation))) nextMaze rotation))
+        then [(nextMaze rotation, nextPath rotation)]
+        else solve_ (nextCur cur maze) (nextPath rotation) (nextMaze rotation))
+        -- else solve_ (nextCur cur maze) ((x,y,rotation) : path) (trace ("\x1b[H\x1b[2J" ++ (render (nextMaze rotation))) nextMaze rotation))
       else []
 
       where
         nextMaze rot = implementRotate cur rot maze
+        nextPath rot = (x, y, rot) : path
 
     nextCur (x, y) maze = (x_, y_)
       where
@@ -139,10 +139,15 @@ solve input = do
         x_ = if jump then (nthLine + 1) `min` ncols maze else x - 1
         y_ = if jump then 1 + x_overflow else y + 1
 
+printRot :: [Cursor] -> String
+printRot = unlines . map (\(x, y) -> "rotate " ++ show (x - 1) ++ " " ++ show (y - 1))
+
 main = do
   pure verifyPixelModel
   input <- getContents
   -- putStrLn "input"
   -- putStrLn . render . parse $ input
   -- putStrLn "solve"
-  mapM_ putStrLn . map render . solve . parse $ input
+  (solved, rotations) <- pure $ solve . parse $ input
+  putStrLn . printRot $ rotations
+  -- putStrLn . render $ solved
