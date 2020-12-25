@@ -1,0 +1,52 @@
+ws ws://maze.server.host/game-pipes/
+
+┓┻┣┣┫┛╹┏
+╹┃╺┃╺╸╹┻
+╻┛╹━╺╻┓┃
+┗━━┻┏┳┣┓
+┗━┃┣┃┻╻╺
+━╻┛┳┃┳╺━
+┃┳┫┳╺┣┛━
+┗┓╸╻╺┛┛┏
+
+["━", "┛", "┃", "┫", "┗", "┓", "┻", "╹", "┣", "╺", "┏", "╻", "╸", "┳", "╋"]
+
+━
+┃
+┏
+┓
+┗
+┛
+┣
+┫
+┳
+┻
+╋
+╸
+╹
+╺
+╻
+
+1,    ╹
+12,   ┗
+123,  ┣
+1234, ╋
+124,  ┻
+13,   ┃
+134,  ┫
+14,   ┛
+2,    ╺
+23,   ┏
+234,  ┳
+24,   ━
+3,    ╻
+34,   ┓
+4,    ╸
+
+1: 8x8
+5: 1200x130
+6: 3000x1000
+
+    validateDirection d =
+      trace (show (d, rot, "//", filter (flipDir d ==) thisRequires, filter (flipDir d ==) thatRequires)) $
+      filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
