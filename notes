@@ -53,6 +53,12 @@ ws ws://maze.server.host/game-pipes/
 
 --
 
+I: ━, ┃
+L: ┏, ┛, ┓, ┗
+T: ┣, ┫, ┳, ┻
+X: ╋
+i: ╸, ╹, ╺, ╻
+
 1. mums nevajag immutable, mums vajag mutable
 1.1. mutable ja tikai viens
 
@@ -68,6 +74,18 @@ ws ws://maze.server.host/game-pipes/
 5.3. optimizēt best ar hashmap O(1), kas ir valīds visiem boardiem
 
 6. simetrijām var nečekot rotācijas (krustam/taisnēm)
+
+7. strongly connected
+7.1. ja šis ir solved un ir T vai I, tad var solvēt dažus no apkārtējiem zariem (ja nekonnektējas)
+
+--
+
+9f9a4fe
+runhaskell solve.hs 2>&1 < samples/2  15.52s user 2.79s system 59% cpu 30.526 total
+
+9f9a4fe + usePixValidPrecomputed
+runhaskell solve.hs 2>&1 < samples/2  74.92s user 3.69s system 84% cpu 1:33.56 total
+(actual solving timed with phone: 30s... same as with usePixValidPrecomputed = False)
 
 --
 
