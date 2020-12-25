@@ -123,8 +123,8 @@ solve input =
       then
         (if x == ncols maze && y == nrows maze
         then [(nextMaze rotation, nextPath rotation)]
-        else solve_ (nextCur cur maze) (nextPath rotation) (nextMaze rotation))
-        -- else solve_ (nextCur cur maze) ((x,y,rotation) : path) (trace ("\x1b[H\x1b[2J" ++ (render (nextMaze rotation))) nextMaze rotation))
+        -- else solve_ (nextCur cur maze) (nextPath rotation) (nextMaze rotation))
+        else solve_ (nextCur cur maze) ((x,y,rotation) : path) (trace ("\x1b[H\x1b[2J" ++ (render (nextMaze rotation))) nextMaze rotation))
       else []
 
       where
@@ -149,5 +149,5 @@ main = do
   -- putStrLn . render . parse $ input
   -- putStrLn "solve"
   (solved, rotations) <- pure $ solve . parse $ input
-  putStrLn . printRot $ rotations
-  -- putStrLn . render $ solved
+  -- putStrLn . printRot $ rotations
+  putStrLn . render $ solved
