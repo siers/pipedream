@@ -2,21 +2,24 @@ module Main where
 
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, isSubsequenceOf, elemIndex)
+import Data.List (sort, isSubsequenceOf, elemIndex, uncons, concat)
 import Data.Map (Map, (!))
-import Data.Matrix as Mx (ncols, nrows)
-import Data.Maybe (fromMaybe, fromJust)
+import Data.Matrix as Mx (Matrix, ncols, nrows)
+import Data.Maybe (fromMaybe, fromJust, maybeToList)
+import Data.Set (Set)
 import Data.Tuple (swap)
 import Debug.Trace
 import qualified Data.HashMap.Strict as HS
 import qualified Data.Map as Map
 import qualified Data.Matrix as Mx
+import qualified Data.Set as Set
+import Text.Printf
 
 t a = trace (show a) a
 
 type Direction = Int -- top 0, right 1, bottom 2, left 3
 type Pix = [Direction]
-type Maze = Mx.Matrix Char
+type Maze = Matrix Char
 
 type Cursor = (Int, Int)
 type CursorRot = (Int, Int, Int)
@@ -28,6 +31,13 @@ type RotatePrecomp = HashMap (Char, Rotation) Char
 
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
 (#!) = (HS.!)
+
+setHead :: Ord a => Set a -> Maybe (a, Set a)
+setHead set = (\head -> (head, head `Set.delete` set)) <$> head'
+  where head' = fst <$> uncons (Set.toList set)
+
+nsize :: Matrix a -> Int
+nsize m = nrows m * ncols m
 
 directions = [0, 1, 2, 3]
 rotations = directions -- nu tā sanāk
@@ -76,6 +86,15 @@ parse =
 render :: Maze -> String
 render = unlines . Mx.toLists
 
+renderWithPos :: Maze -> Cursor -> String
+renderWithPos maze target =
+  unlines
+  . map concat
+  . Mx.toLists
+  . Mx.mapPos (\cur c -> printf (if target == cur then "\x1b[31m%s\x1b[39m" else "%s") (c : []))
+  $ maze
+
+
 -- C: n=1, CW: n=-1
 rotateDir :: Int -> Direction -> Direction
 rotateDir n = (`mod` 4) . (+ n)
@@ -102,10 +121,6 @@ cursorNext (x, y) 0 = (y - 1, x)
 cursorNext (x, y) 1 = (y, x + 1)
 cursorNext (x, y) 2 = (y + 1, x)
 cursorNext (x, y) 3 = (y, x - 1)
-
-implementRotate :: RotatePrecomp -> Cursor -> Rotation -> Maze -> Maze
-implementRotate rotP cur@(x, y) rot maze = Mx.setElem rotated (y, x) maze
-  where rotated = rotP #! (Mx.getElem y x maze, rot)
 
 --
 
@@ -147,40 +162,41 @@ mazePixValid pixValidP maze cur@(x, y) this rotation =
       where
         directionUncertain = (d == 1 && x < ncols maze) || (d == 2 && y < nrows maze)
 
-solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> Maze
-solve pixValidP rotP = head . solve_ (1, 1)
+solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
+solve pixValidP rotP = take 1 . solve_ (1, 1) Set.empty Set.empty
   where
-    solve_ :: Cursor -> Maze -> [Maze]
-    solve_ cur@(x, y) maze = do
+    solve_ :: Cursor -> Set Cursor -> Set Cursor -> Maze -> [Maze]
+    solve_ cur@(x, y) solved continue maze = do
       this <- pure $ Mx.getElem y x maze
-      let rotations = mazePixValid pixValidP maze cur this `filter` chooseRotation this
-      let canUseMutation = length rotations == 1
-
-      rotation <- rotations
-      (if x == ncols maze && y == nrows maze
-      then [nextMaze rotation]
-      else solve_ (nextCur cur maze) (traceBoard $ nextMaze rotation))
+      rotation <- mazePixValid pixValidP maze cur this `filter` chooseRotation this
+      -- canUseMutation = length rotations == 1
+      solveRotation rotation (rotP #! (Mx.getElem y x maze, rotation))
 
       where
-        nextMaze rot = implementRotate rotP cur rot maze
+        chooseRotation '╋' = [0]
+        chooseRotation '┃' = [0,1]
+        chooseRotation '━' = [0,1]
+        chooseRotation _ = rotations
 
-    chooseRotation '╋' = [0]
-    chooseRotation '┃' = [0,1]
-    chooseRotation '━' = [0,1]
-    chooseRotation _ = rotations
+        solveRotation :: Rotation -> Char -> [Maze]
+        solveRotation rotation rotated =
+          if Set.size solved == nsize maze
+          then [nextMaze]
+          else do
+            (nextCursor, nextContinue) <- maybeToList $ setHead nextContinue
+            solve_ nextCursor nextSolved nextContinue (traceBoard nextMaze)
 
-    traceBoard board =
-      if 't' == 'f'
-      then board
-      else trace ("\x1b[H\x1b[2J" ++ (render board)) board
+          where
+            nextCursors = Set.fromList $ (cursorNext cur <$> mapChar rotated)
+            nextSolved = cur `Set.insert` solved
+            nextContinue = (nextCursors `Set.union` continue) `Set.difference` solved
+            nextMaze = Mx.setElem rotated (y, x) maze
 
-    nextCur (x, y) maze = (x_, y_)
-      where
-        jump = x == 1 || y == nrows maze
-        nthLine = x + y - 1
-        x_overflow = ((nthLine + 1) `max` ncols maze) - ncols maze
-        x_ = if jump then (nthLine + 1) `min` ncols maze else x - 1
-        y_ = if jump then 1 + x_overflow else y + 1
+            traceBoard board =
+              if 't' == 'f'
+              then board
+              else trace (show cur ++ "\n" ++ renderWithPos board cur) board
+              -- else trace ("\x1b[H\x1b[2J" ++ (render board)) board
 
 --
 
@@ -230,7 +246,7 @@ main = do
   rotatePrecomp <- pure rotatePrecomputed
 
   input <- parse <$> getContents
-  solved <- pure . solve pixValidPrecomp rotatePrecomp $ input
+  solveds <- pure . solve pixValidPrecomp rotatePrecomp $ input
 
-  putStrLn . printRot . computeRotations input $ solved
-  putStrLn . render $ solved
+  mapM_ (putStrLn . printRot . computeRotations input) $ solveds
+  mapM_ (putStrLn . render) $ solveds
