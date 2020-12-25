@@ -78,6 +78,9 @@ i: ╸, ╹, ╺, ╻
 7. strongly connected
 7.1. ja šis ir solved un ir T vai I, tad var solvēt dažus no apkārtējiem zariem (ja nekonnektējas)
 
+8. rotations = filter pixvalid rotations
+8.1. if rotations == 1, tad var lietot mutable implement uz boarda
+
 --
 
 9f9a4fe
