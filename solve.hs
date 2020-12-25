@@ -38,8 +38,8 @@ setHead :: Ord a => Set a -> Maybe (a, Set a)
 setHead set = (\head -> (head, head `Set.delete` set)) <$> head'
   where head' = fst <$> uncons (Set.toList set)
 
-nsize :: Matrix a -> Int
-nsize m = nrows m * ncols m
+matrixSize :: Matrix a -> Int
+matrixSize m = nrows m * ncols m
 
 matrixBounded :: Matrix a -> Cursor -> Bool
 matrixBounded m (x, y) = not $ (x < 1 || y < 1 || ncols m < x || nrows m < y)
@@ -174,7 +174,7 @@ solve pixValidP rotP = take 1 . solve_ (1, 1) Set.empty Set.empty
 
         solveRotation :: Rotation -> Char -> [Maze]
         solveRotation rotation rotated =
-          if Set.size solveds == nsize maze - 1
+          if Set.size solveds == matrixSize maze - 1
           then [nextMaze]
           else do
             (nextCursor, nextContinues) <- maybeToList $ setHead nextContinues
