@@ -76,7 +76,10 @@ i: ╸, ╹, ╺, ╻
 6. simetrijām var nečekot rotācijas (krustam/taisnēm)
 
 7. strongly connected
-7.1. ja šis ir solved un ir T vai I, tad var solvēt dažus no apkārtējiem zariem (ja nekonnektējas)
+7.1. ja šis ir solved un ir T vai I, tad var solvēt dažus no apkārtējiem zariem (ja nekonnektējas) – they're forced
+7.2. ja šis apmeklēts, tad solved set
+7.3. ja rotation is pixValid, tad continue list = (new branches + forced + continue) filter solved. start with first from continue
+7.4. ja continue ir empty & size == boardsize, tad valid
 
 8. rotations = filter pixvalid rotations
 8.1. if rotations == 1, tad var lietot mutable implement uz boarda
