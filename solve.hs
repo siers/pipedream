@@ -167,20 +167,18 @@ mazePixValid pixValidP maze (x, y) this rotation =
     curN 3 = (y, x - 1)
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> (Maze, [CursorRot])
-solve pixValidP rotP = head . solve_ (1, 1) []
+solve pixValidP rotP = last . take 4 . solve_ (1, 1) []
   where
     solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [(Int, Int, Int)])]
     solve_ cur@(x, y) path maze = do
       this <- pure $ Mx.getElem y x maze
-      rotation <- chooseRotation this
+      let rotations = mazePixValid pixValidP maze cur this `filter` chooseRotation this
+      let canUseMutation = length rotations == 1
+      rotation <- rotations
 
-      if mazePixValid pixValidP maze cur this rotation
-      -- if trace (show (x, y, rotation, nextCur cur maze)) pixValid maze cur rotation
-      then
-        (if x == ncols maze && y == nrows maze
-        then [(nextMaze rotation, nextPath rotation)]
-        else solve_ (nextCur cur maze) (nextPath rotation) (traceBoard $ nextMaze rotation))
-      else []
+      (if x == ncols maze && y == nrows maze
+      then [(nextMaze rotation, nextPath rotation)]
+      else solve_ (nextCur cur maze) (nextPath rotation) (traceBoard $ nextMaze rotation))
 
       where
         nextMaze rot = implementRotate rotP cur rot maze
