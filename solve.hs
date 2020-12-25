@@ -1,11 +1,14 @@
 module Main where
 
+import Data.Hashable (Hashable)
+import Data.HashMap.Strict (HashMap)
 import Data.List (sort, isSubsequenceOf)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (ncols, nrows)
 import Data.Maybe (fromMaybe)
 import Data.Tuple (swap)
 import Debug.Trace
+import qualified Data.HashMap.Strict as HS
 import qualified Data.Map as Map
 import qualified Data.Matrix as Mx
 
@@ -13,14 +16,20 @@ t a = trace (show a) a
 
 type Direction = Int -- top 0, right 1, bottom 2, left 3
 type Pix = [Direction]
-type PixCheck = (Char, Char, Char, Char, Char, Rotation) -- 0,1,2,3 – direction + 4 – current
 type Maze = Mx.Matrix Char
 
 type Cursor = (Int, Int)
 type CursorRot = (Int, Int, Int)
 type Rotation = Int
 
+type PixCheck = (Char, Char, Char, Char, Char, Rotation) -- 0,1,2,3 – direction + 4 – current
+type PixValidPrecomp = HashMap PixCheck Bool
+
+(#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
+(#!) = (HS.!)
+
 directions = [0, 1, 2, 3]
+rotations = directions
 
 charMapEntries =
   [ ('╹', [0])
@@ -38,9 +47,15 @@ charMapEntries =
   , ('╻', [2])
   , ('┓', [2,3])
   , ('╸', [3])
-  -- ' ' wall
-  -- 'u' unsolved
   ]
+
+charsSpecial =
+  [ ' ' -- wall
+  , 'u' -- unsolved
+  ]
+
+(chars, pixs) = unzip charMapEntries
+charsWithSpecial = chars ++ charsSpecial
 
 charMap :: Map Char Pix
 charMap = Map.fromList charMapEntries
@@ -61,15 +76,11 @@ render :: Maze -> String
 render = unlines . Mx.toLists
 
 verifyPixelModel = (pixs ==) . last $
-  [ map (idLookup . rotateC) pixs
-  , map (idLookup . rotateC . rotateC) pixs
-  , map (idLookup . rotateC . rotateC . rotateC) pixs
-  , map (idLookup . rotateC . rotateC . rotateC . rotateC) pixs
+  [ map (mapChar . mapPix . rotate 1) pixs
+  , map (mapChar . mapPix . rotate 1 . rotate 1) pixs
+  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1) pixs
+  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1 . rotate 1) pixs
   ]
-  where
-    idLookup = mapChar . mapPix
-    pixs = map snd charMapEntries
-    rotateC = rotate 1
 
 --
 
@@ -111,11 +122,27 @@ pixValid (d0, d1, d2, d3, this, rot) =
           then []
           else mapChar that
 
--- given top and left pix is solved, verify this pix is valid after rotation
-mazePixValid :: Maze -> Cursor -> Rotation -> Bool
-mazePixValid maze (x, y) rotation =
-  pixValid (charN 0, charN 1, charN 2, charN 3, charN 4, rotation)
+pixValidPrecomputed :: PixValidPrecomp
+pixValidPrecomputed = HS.fromList list
   where
+    list = (pixValid >>= flip (,)) `map` all
+    all = do
+      p1 <- charsWithSpecial
+      p2 <- charsWithSpecial
+      p3 <- charsWithSpecial
+      p4 <- charsWithSpecial
+      p5 <- chars
+      r <- rotations
+      pure (p1, p2, p3, p4, p5, r)
+
+-- given top and left pix is solved, verify this pix is valid after rotation
+mazePixValid :: PixValidPrecomp -> Maze -> Cursor -> Rotation -> Bool
+mazePixValid pixValidP maze (x, y) rotation =
+  check (charN 0, charN 1, charN 2, charN 3, charN 4, rotation)
+  where
+    -- check = (pixValidP #!)
+    check = pixValid
+
     charN d =
       if directionUncertain
       then 'u'
@@ -130,14 +157,14 @@ mazePixValid maze (x, y) rotation =
     curN 3 = (y, x - 1)
     curN 4 = (y, x)
 
-solve :: Maze -> (Maze, [CursorRot])
-solve = head . solve_ (1, 1) []
+solve :: PixValidPrecomp -> Maze -> (Maze, [CursorRot])
+solve pixValidP = head . solve_ (1, 1) []
   where
     solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [(Int, Int, Int)])]
     solve_ cur@(x, y) path maze = do
       rotation <- directions
 
-      if mazePixValid maze cur rotation
+      if mazePixValid pixValidP maze cur rotation
       -- if trace (show (x, y, rotation, nextCur cur maze)) pixValid maze cur rotation
       then
         (if x == ncols maze && y == nrows maze
@@ -171,10 +198,14 @@ printRot =
 
 main = do
   pure verifyPixelModel
+
+  pixValidPrecomp <- pure pixValidPrecomputed
+  putStrLn (seq pixValidPrecomputed "pixValid precomputed")
+
   input <- getContents
   -- putStrLn "input"
   -- putStrLn . render . parse $ input
   -- putStrLn "solve"
-  (solved, rotations) <- pure $ solve . parse $ input
+  (solved, rotations) <- pure $ solve pixValidPrecomp . parse $ input
   -- putStrLn . printRot $ rotations
   putStrLn . render $ solved
