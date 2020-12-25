@@ -13,7 +13,8 @@ t a = trace (show a) a
 
 type Direction = Int -- top 0, right 1, bottom 2, left 3
 type Pix = [Direction]
-type Maze = Mx.Matrix Pix
+type PixCheck = (Char, Char, Char, Char, Char, Rotation) -- 0,1,2,3 – direction + 4 – current
+type Maze = Mx.Matrix Char
 
 type Cursor = (Int, Int)
 type Rotation = Int
@@ -36,23 +37,27 @@ charMapEntries =
   , ('╻', [2])
   , ('┓', [2,3])
   , ('╸', [3])
+  -- ' ' wall
+  -- 'u' unsolved
   ]
 
 charMap :: Map Char Pix
 charMap = Map.fromList charMapEntries
 
-mapChar :: Map Pix Char
-mapChar = Map.fromList $ map swap charMapEntries
+pixMap :: Map Pix Char
+pixMap = Map.fromList $ map swap charMapEntries
+
+mapChar = (charMap !)
+mapPix = (pixMap !) . sort
 
 parse :: String -> Maze
 parse =
   Mx.fromLists
   . filter (not . null)
-  . map (map (charMap !))
   . lines
 
 render :: Maze -> String
-render = unlines . map (map ((mapChar !) . sort)) . Mx.toLists
+render = unlines . Mx.toLists
 
 verifyPixelModel = (pixs ==) . last $
   [ map (idLookup . rotateC) pixs
@@ -61,7 +66,7 @@ verifyPixelModel = (pixs ==) . last $
   , map (idLookup . rotateC . rotateC . rotateC . rotateC) pixs
   ]
   where
-    idLookup = (charMap !) . (mapChar !)
+    idLookup = mapChar . mapPix
     pixs = map snd charMapEntries
     rotateC = rotate 1
 
@@ -79,34 +84,50 @@ rotate n = map (rotateDir n)
 opposite = 2
 
 implementRotate :: Cursor -> Rotation -> Maze -> Maze
-implementRotate cur@(x, y) rot maze = Mx.setElem (rotate rot $ Mx.getElem y x maze) (y, x) maze
+implementRotate cur@(x, y) rot maze = Mx.setElem rotated (y, x) maze
+  where
+    rotated = mapPix . rotate rot . mapChar $ Mx.getElem y x maze
 
--- given top and left pix is solved, verify this pix is valid after rotation
-pixValid :: Maze -> Cursor -> Rotation -> Bool
-pixValid maze cur@(x, y) rot = all validateDirection directions
+-- to be optimized in a hashmap
+pixValid :: PixCheck -> Bool
+pixValid (d0, d1, d2, d3, this, rot) =
+  all validateDirection directions
   where
     validateDirection d = filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
       where
-        -- square in that direction does not have its final value yet
-        directionUncertain = (d == 1 && x < ncols maze) || (d == 2 && y < nrows maze)
+        that :: Char
+        that = [d0, d1, d2, d3] !! d
 
         thisRequires :: Pix
         thisRequires =
-          if directionUncertain
+          if that == 'u'
           then []
-          else (rot + opposite) `rotate` (Mx.getElem y x maze)
+          else (rot + opposite) `rotate` mapChar this
 
         thatRequires :: Pix
         thatRequires =
-          if directionUncertain
+          if that == 'u' || that == ' '
           then []
-          else [] `fromMaybe` uncurry Mx.safeGet (curN d) maze
-          where
-            curN :: Direction -> Cursor
-            curN 0 = (y - 1, x)
-            curN 1 = (y, x + 1)
-            curN 2 = (y + 1, x)
-            curN 3 = (y, x - 1)
+          else mapChar that
+
+-- given top and left pix is solved, verify this pix is valid after rotation
+mazePixValid :: Maze -> Cursor -> Rotation -> Bool
+mazePixValid maze (x, y) rotation =
+  pixValid (charN 0, charN 1, charN 2, charN 3, charN 4, rotation)
+  where
+    charN d =
+      if directionUncertain
+      then 'u'
+      else ' ' `fromMaybe` uncurry Mx.safeGet (curN d) maze
+      where
+        directionUncertain = (d == 1 && x < ncols maze) || (d == 2 && y < nrows maze)
+
+    curN :: Direction -> Cursor
+    curN 0 = (y - 1, x)
+    curN 1 = (y, x + 1)
+    curN 2 = (y + 1, x)
+    curN 3 = (y, x - 1)
+    curN 4 = (y, x)
 
 solve :: Maze -> (Maze, [(Int, Int)])
 solve input =
@@ -118,13 +139,13 @@ solve input =
     solve_ cur@(x, y) path maze = do
       rotation <- directions
 
-      if pixValid maze cur rotation
+      if mazePixValid maze cur rotation
       -- if trace (show (x, y, rotation, nextCur cur maze)) pixValid maze cur rotation
       then
         (if x == ncols maze && y == nrows maze
         then [(nextMaze rotation, nextPath rotation)]
-        -- else solve_ (nextCur cur maze) (nextPath rotation) (nextMaze rotation))
-        else solve_ (nextCur cur maze) ((x,y,rotation) : path) (trace ("\x1b[H\x1b[2J" ++ (render (nextMaze rotation))) nextMaze rotation))
+        else solve_ (nextCur cur maze) (nextPath rotation) (nextMaze rotation))
+        -- else solve_ (nextCur cur maze) ((x,y,rotation) : path) (trace ("\x1b[H\x1b[2J" ++ (render (nextMaze rotation))) nextMaze rotation))
       else []
 
       where
