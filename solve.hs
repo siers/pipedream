@@ -25,9 +25,11 @@ type Cursor = (Int, Int)
 type CursorRot = (Int, Int, Int)
 type Rotation = Int
 
-type PixCheck = (Char, Char, Char, Char, Char, Rotation) -- 0,1,2,3 – direction + 4 – current
+type PixCheck = (Char, Char, Rotation, Direction)
 type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
+
+type CursorSet = Set Cursor
 
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
 (#!) = (HS.!)
@@ -38,6 +40,11 @@ setHead set = (\head -> (head, head `Set.delete` set)) <$> head'
 
 nsize :: Matrix a -> Int
 nsize m = nrows m * ncols m
+
+matrixBounded :: Matrix a -> Cursor -> Bool
+matrixBounded m (x, y) = not $ (x < 1 || y < 1 || ncols m < x || nrows m < y)
+
+--
 
 directions = [0, 1, 2, 3]
 rotations = directions -- nu tā sanāk
@@ -62,7 +69,6 @@ charMapEntries =
 
 charsSpecial =
   [ ' ' -- wall
-  , 'u' -- unsolved
   ]
 
 (chars, pixs) = unzip charMapEntries
@@ -91,7 +97,7 @@ renderWithPos maze target =
   unlines
   . map concat
   . Mx.toLists
-  . Mx.mapPos (\cur c -> printf (if target == cur then "\x1b[31m%s\x1b[39m" else "%s") (c : []))
+  . Mx.mapPos (\cur c -> printf (if target == swap cur then "\x1b[31m%s\x1b[39m" else "%s") (c : []))
   $ maze
 
 
@@ -116,61 +122,49 @@ verifyPixelModel = (pixs ==) . last $
   , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1 . rotate 1) pixs
   ]
 
-cursorNext :: Cursor -> Direction -> Cursor
-cursorNext (x, y) 0 = (y - 1, x)
-cursorNext (x, y) 1 = (y, x + 1)
-cursorNext (x, y) 2 = (y + 1, x)
-cursorNext (x, y) 3 = (y, x - 1)
+cursorDelta :: Cursor -> Direction -> Cursor
+cursorDelta (x, y) 0 = (x, y - 1)
+cursorDelta (x, y) 1 = (x + 1, y)
+cursorDelta (x, y) 2 = (x, y + 1)
+cursorDelta (x, y) 3 = (x - 1, y)
 
 --
 
 pixValid :: PixCheck -> Bool
-pixValid (d0, d1, d2, d3, this, rot) =
-  all validateDirection directions
-  where
-    validateDirection d = filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
-      where
-        that :: Char
-        that = [d0, d1, d2, d3] !! d
+pixValid (this, that, rotation, direction) =
+  filter (flipDir direction ==) thisRequires == filter (flipDir direction ==) thatRequires
+    where
+      thisRequires :: Pix
+      thisRequires = (rotation + opposite) `rotate` mapChar this
 
-        thisRequires :: Pix
-        thisRequires =
-          if that == 'u'
-          then []
-          else (rot + opposite) `rotate` mapChar this
-
-        thatRequires :: Pix
-        thatRequires =
-          if that == 'u' || that == ' '
-          then []
-          else mapChar that
+      thatRequires :: Pix
+      thatRequires = if that == ' ' then [] else mapChar that
 
 -- given top and left pix is solved, verify this pix is valid after rotation
-mazePixValid :: PixValidPrecomp -> Maze -> Cursor -> Char -> Rotation -> Bool
-mazePixValid pixValidP maze cur@(x, y) this rotation =
-  check (charN 0, charN 1, charN 2, charN 3, this, rotation)
+mazePixValid :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Char -> Rotation -> Bool
+mazePixValid pixValidP maze solveds cur@(x, y) this rotation =
+  all checkDirection directions
   where
-    check =
-      if usePixValidPrecomputed
-      then (pixValidP #!)
-      else pixValid
-
-    charN d =
-      if directionUncertain
-      then 'u'
-      else ' ' `fromMaybe` uncurry Mx.safeGet (cursorNext cur d) maze
-      where
-        directionUncertain = (d == 1 && x < ncols maze) || (d == 2 && y < nrows maze)
+    checkDirection d =
+      if (not $ matrixBounded maze curDelta) || curDelta `Set.member` solveds
+      then pixValidP #! (this, char, rotation, d)
+      else True
+        where
+          curDelta = cursorDelta cur d
+          char =
+            if matrixBounded maze curDelta
+            then uncurry Mx.getElem (swap curDelta) maze
+            else ' '
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP = take 1 . solve_ (1, 1) Set.empty Set.empty
   where
-    solve_ :: Cursor -> Set Cursor -> Set Cursor -> Maze -> [Maze]
-    solve_ cur@(x, y) solved continue maze = do
+    solve_ :: Cursor -> CursorSet -> CursorSet -> Maze -> [Maze]
+    solve_ cur@(x, y) solveds continues maze = do
       this <- pure $ Mx.getElem y x maze
-      rotation <- mazePixValid pixValidP maze cur this `filter` chooseRotation this
+      rotation <- mazePixValid pixValidP maze solveds cur this `filter` (chooseRotation this)
       -- canUseMutation = length rotations == 1
-      solveRotation rotation (rotP #! (Mx.getElem y x maze, rotation))
+      solveRotation rotation (rotP #! (this, rotation))
 
       where
         chooseRotation '╋' = [0]
@@ -180,22 +174,22 @@ solve pixValidP rotP = take 1 . solve_ (1, 1) Set.empty Set.empty
 
         solveRotation :: Rotation -> Char -> [Maze]
         solveRotation rotation rotated =
-          if Set.size solved == nsize maze
+          if Set.size solveds == nsize maze - 1
           then [nextMaze]
           else do
-            (nextCursor, nextContinue) <- maybeToList $ setHead nextContinue
-            solve_ nextCursor nextSolved nextContinue (traceBoard nextMaze)
+            (nextCursor, nextContinues) <- maybeToList $ setHead nextContinues
+            solve_ nextCursor nextSolveds nextContinues (traceBoard nextMaze)
 
           where
-            nextCursors = Set.fromList $ (cursorNext cur <$> mapChar rotated)
-            nextSolved = cur `Set.insert` solved
-            nextContinue = (nextCursors `Set.union` continue) `Set.difference` solved
+            nextCursors = Set.fromList $ matrixBounded maze `filter` (cursorDelta cur <$> mapChar rotated)
+            nextSolveds = cur `Set.insert` solveds
+            nextContinues = (nextCursors `Set.union` continues) `Set.difference` solveds
             nextMaze = Mx.setElem rotated (y, x) maze
 
             traceBoard board =
               if 't' == 'f'
               then board
-              else trace (show cur ++ "\n" ++ renderWithPos board cur) board
+              else trace (show (cur, nextContinues) ++ "," ++ rotated:[] ++ "\n" ++ renderWithPos board cur) board
               -- else trace ("\x1b[H\x1b[2J" ++ (render board)) board
 
 --
@@ -229,15 +223,11 @@ pixValidPrecomputed = HS.fromList list
   where
     list = (pixValid >>= flip (,)) `map` all
     all = do
-      p1 <- charsWithSpecial
-      p2 <- charsWithSpecial
-      p3 <- charsWithSpecial
-      p4 <- charsWithSpecial
-      p5 <- chars
+      this <- chars
+      that <- charsWithSpecial
       r <- rotations
-      pure (p1, p2, p3, p4, p5, r)
-
-usePixValidPrecomputed = False
+      d <- directions
+      pure (this, that, r, d)
 
 main = do
   pure verifyPixelModel
