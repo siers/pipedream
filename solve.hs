@@ -76,15 +76,6 @@ parse =
 render :: Maze -> String
 render = unlines . Mx.toLists
 
-verifyPixelModel = (pixs ==) . last $
-  [ map (mapChar . mapPix . rotate 1) pixs
-  , map (mapChar . mapPix . rotate 1 . rotate 1) pixs
-  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1) pixs
-  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1 . rotate 1) pixs
-  ]
-
---
-
 -- C: n=1, CW: n=-1
 rotateDir :: Int -> Direction -> Direction
 rotateDir n = (`mod` 4) . (+ n)
@@ -96,18 +87,24 @@ rotate n = map (rotateDir n)
 
 opposite = 2
 
+verifyPixelModel = (pixs ==) . last $
+  [ map (mapChar . mapPix . rotate 1) pixs
+  , map (mapChar . mapPix . rotate 1 . rotate 1) pixs
+  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1) pixs
+  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1 . rotate 1) pixs
+  ]
+
+cursorNext :: Cursor -> Direction -> Cursor
+cursorNext (x, y) 0 = (y - 1, x)
+cursorNext (x, y) 1 = (y, x + 1)
+cursorNext (x, y) 2 = (y + 1, x)
+cursorNext (x, y) 3 = (y, x - 1)
+
 implementRotate :: RotatePrecomp -> Cursor -> Rotation -> Maze -> Maze
 implementRotate rotP cur@(x, y) rot maze = Mx.setElem rotated (y, x) maze
   where rotated = rotP #! (Mx.getElem y x maze, rot)
 
-rotatePrecomputed :: RotatePrecomp
-rotatePrecomputed = HS.fromList $ list (\(c, r) -> mapPix . rotate r . mapChar $ c)
-  where
-    list f = (f >>= flip (,)) `map` all
-    all = do
-      p1 <- chars
-      r <- rotations
-      pure (p1, r)
+--
 
 pixValid :: PixCheck -> Bool
 pixValid (d0, d1, d2, d3, this, rot) =
@@ -130,22 +127,9 @@ pixValid (d0, d1, d2, d3, this, rot) =
           then []
           else mapChar that
 
-pixValidPrecomputed :: PixValidPrecomp
-pixValidPrecomputed = HS.fromList list
-  where
-    list = (pixValid >>= flip (,)) `map` all
-    all = do
-      p1 <- charsWithSpecial
-      p2 <- charsWithSpecial
-      p3 <- charsWithSpecial
-      p4 <- charsWithSpecial
-      p5 <- chars
-      r <- rotations
-      pure (p1, p2, p3, p4, p5, r)
-
 -- given top and left pix is solved, verify this pix is valid after rotation
 mazePixValid :: PixValidPrecomp -> Maze -> Cursor -> Char -> Rotation -> Bool
-mazePixValid pixValidP maze (x, y) this rotation =
+mazePixValid pixValidP maze cur@(x, y) this rotation =
   check (charN 0, charN 1, charN 2, charN 3, this, rotation)
   where
     check =
@@ -156,20 +140,14 @@ mazePixValid pixValidP maze (x, y) this rotation =
     charN d =
       if directionUncertain
       then 'u'
-      else ' ' `fromMaybe` uncurry Mx.safeGet (curN d) maze
+      else ' ' `fromMaybe` uncurry Mx.safeGet (cursorNext cur d) maze
       where
         directionUncertain = (d == 1 && x < ncols maze) || (d == 2 && y < nrows maze)
-
-    curN :: Direction -> Cursor
-    curN 0 = (y - 1, x)
-    curN 1 = (y, x + 1)
-    curN 2 = (y + 1, x)
-    curN 3 = (y, x - 1)
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> (Maze, [CursorRot])
 solve pixValidP rotP = last . take 4 . solve_ (1, 1) []
   where
-    solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [(Int, Int, Int)])]
+    solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [CursorRot])]
     solve_ cur@(x, y) path maze = do
       this <- pure $ Mx.getElem y x maze
       let rotations = mazePixValid pixValidP maze cur this `filter` chooseRotation this
@@ -202,12 +180,36 @@ solve pixValidP rotP = last . take 4 . solve_ (1, 1) []
         x_ = if jump then (nthLine + 1) `min` ncols maze else x - 1
         y_ = if jump then 1 + x_overflow else y + 1
 
+--
+
 printRot :: [CursorRot] -> String
 printRot =
   unlines
   . map (\(x, y) -> "rotate " ++ show (x - 1) ++ " " ++ show (y - 1))
   . (>>= (\(x, y, r) -> take r (repeat (x, y))))
   . reverse
+
+rotatePrecomputed :: RotatePrecomp
+rotatePrecomputed = HS.fromList $ list (\(c, r) -> mapPix . rotate r . mapChar $ c)
+  where
+    list f = (f >>= flip (,)) `map` all
+    all = do
+      p1 <- chars
+      r <- rotations
+      pure (p1, r)
+
+pixValidPrecomputed :: PixValidPrecomp
+pixValidPrecomputed = HS.fromList list
+  where
+    list = (pixValid >>= flip (,)) `map` all
+    all = do
+      p1 <- charsWithSpecial
+      p2 <- charsWithSpecial
+      p3 <- charsWithSpecial
+      p4 <- charsWithSpecial
+      p5 <- chars
+      r <- rotations
+      pure (p1, p2, p3, p4, p5, r)
 
 usePixValidPrecomputed = False
 
