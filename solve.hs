@@ -2,10 +2,10 @@ module Main where
 
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, isSubsequenceOf)
+import Data.List (sort, isSubsequenceOf, elemIndex)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (ncols, nrows)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import Data.Tuple (swap)
 import Debug.Trace
 import qualified Data.HashMap.Strict as HS
@@ -83,7 +83,10 @@ rotateDir n = (`mod` 4) . (+ n)
 flipDir = rotateDir 2
 
 rotate :: Rotation -> Pix -> Pix
-rotate n = map (rotateDir n)
+rotate r = map (rotateDir r)
+
+rotateChar :: Rotation -> Char -> Char
+rotateChar r = mapPix . rotate r .mapChar
 
 opposite = 2
 
@@ -189,6 +192,14 @@ printRot =
   . (>>= (\(x, y, r) -> take r (repeat (x, y))))
   . reverse
 
+computeRotations :: Maze -> Maze -> [CursorRot]
+computeRotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input) $ cursorRot
+  where
+    cursorRot (y, x) = (x, y, get input `rotations` get solved)
+      where
+        get = Mx.getElem y x
+        rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
+
 rotatePrecomputed :: RotatePrecomp
 rotatePrecomputed = HS.fromList $ list (\(c, r) -> mapPix . rotate r . mapChar $ c)
   where
@@ -219,10 +230,7 @@ main = do
   pixValidPrecomp <- pure pixValidPrecomputed
   rotatePrecomp <- pure rotatePrecomputed
 
-  input <- getContents
-  -- putStrLn "input"
-  -- putStrLn . render . parse $ input
-  -- putStrLn "solve"
-  (solved, rotations) <- pure $ solve pixValidPrecomp rotatePrecomp . parse $ input
-  -- putStrLn . printRot $ rotations
+  input <- parse <$> getContents
+  (solved, _) <- pure $ solve pixValidPrecomp rotatePrecomp $ input
+  putStrLn . printRot . computeRotations input $ solved
   putStrLn . render $ solved
