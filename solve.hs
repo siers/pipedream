@@ -144,11 +144,15 @@ solve input =
       then
         (if x == ncols maze && y == nrows maze
         then [(nextMaze rotation, nextPath rotation)]
-        else solve_ (nextCur cur maze) (nextPath rotation) (nextMaze rotation))
-        -- else solve_ (nextCur cur maze) ((x,y,rotation) : path) (trace ("\x1b[H\x1b[2J" ++ (render (nextMaze rotation))) nextMaze rotation))
+        else solve_ (nextCur cur maze) (nextPath rotation) (traceBoard $ nextMaze rotation))
       else []
 
       where
+        traceBoard board =
+          if 't' == 't'
+          then board
+          else trace ("\x1b[H\x1b[2J" ++ (render board)) board
+
         nextMaze rot = implementRotate cur rot maze
         nextPath rot = (x, y, rot) : path
 
