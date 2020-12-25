@@ -147,23 +147,22 @@ mazePixValid pixValidP maze cur@(x, y) this rotation =
       where
         directionUncertain = (d == 1 && x < ncols maze) || (d == 2 && y < nrows maze)
 
-solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> (Maze, [CursorRot])
-solve pixValidP rotP = last . take 4 . solve_ (1, 1) []
+solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> Maze
+solve pixValidP rotP = head . solve_ (1, 1)
   where
-    solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [CursorRot])]
-    solve_ cur@(x, y) path maze = do
+    solve_ :: Cursor -> Maze -> [Maze]
+    solve_ cur@(x, y) maze = do
       this <- pure $ Mx.getElem y x maze
       let rotations = mazePixValid pixValidP maze cur this `filter` chooseRotation this
       let canUseMutation = length rotations == 1
-      rotation <- rotations
 
+      rotation <- rotations
       (if x == ncols maze && y == nrows maze
-      then [(nextMaze rotation, nextPath rotation)]
-      else solve_ (nextCur cur maze) (nextPath rotation) (traceBoard $ nextMaze rotation))
+      then [nextMaze rotation]
+      else solve_ (nextCur cur maze) (traceBoard $ nextMaze rotation))
 
       where
         nextMaze rot = implementRotate rotP cur rot maze
-        nextPath rot = (x, y, rot) : path
 
     chooseRotation '╋' = [0]
     chooseRotation '┃' = [0,1]
@@ -231,6 +230,7 @@ main = do
   rotatePrecomp <- pure rotatePrecomputed
 
   input <- parse <$> getContents
-  (solved, _) <- pure $ solve pixValidPrecomp rotatePrecomp $ input
+  solved <- pure . solve pixValidPrecomp rotatePrecomp $ input
+
   putStrLn . printRot . computeRotations input $ solved
   putStrLn . render $ solved
