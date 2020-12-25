@@ -24,6 +24,7 @@ type Rotation = Int
 
 type PixCheck = (Char, Char, Char, Char, Char, Rotation) -- 0,1,2,3 – direction + 4 – current
 type PixValidPrecomp = HashMap PixCheck Bool
+type RotatePrecomp = HashMap (Char, Rotation) Char
 
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
 (#!) = (HS.!)
@@ -95,12 +96,19 @@ rotate n = map (rotateDir n)
 
 opposite = 2
 
-implementRotate :: Cursor -> Rotation -> Maze -> Maze
-implementRotate cur@(x, y) rot maze = Mx.setElem rotated (y, x) maze
-  where
-    rotated = mapPix . rotate rot . mapChar $ Mx.getElem y x maze
+implementRotate :: RotatePrecomp -> Cursor -> Rotation -> Maze -> Maze
+implementRotate rotP cur@(x, y) rot maze = Mx.setElem rotated (y, x) maze
+  where rotated = rotP #! (Mx.getElem y x maze, rot)
 
--- to be optimized in a hashmap
+rotatePrecomputed :: RotatePrecomp
+rotatePrecomputed = HS.fromList $ list (\(c, r) -> mapPix . rotate r . mapChar $ c)
+  where
+    list f = (f >>= flip (,)) `map` all
+    all = do
+      p1 <- chars
+      r <- rotations
+      pure (p1, r)
+
 pixValid :: PixCheck -> Bool
 pixValid (d0, d1, d2, d3, this, rot) =
   all validateDirection directions
@@ -141,7 +149,7 @@ mazePixValid pixValidP maze (x, y) rotation =
   check (charN 0, charN 1, charN 2, charN 3, charN 4, rotation)
   where
     -- check = (pixValidP #!)
-    check = pixValid
+    check = pixValid -- XXX: precomputation skipped
 
     charN d =
       if directionUncertain
@@ -157,8 +165,8 @@ mazePixValid pixValidP maze (x, y) rotation =
     curN 3 = (y, x - 1)
     curN 4 = (y, x)
 
-solve :: PixValidPrecomp -> Maze -> (Maze, [CursorRot])
-solve pixValidP = head . solve_ (1, 1) []
+solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> (Maze, [CursorRot])
+solve pixValidP rotP = head . solve_ (1, 1) []
   where
     solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [(Int, Int, Int)])]
     solve_ cur@(x, y) path maze = do
@@ -178,7 +186,7 @@ solve pixValidP = head . solve_ (1, 1) []
           then board
           else trace ("\x1b[H\x1b[2J" ++ (render board)) board
 
-        nextMaze rot = implementRotate cur rot maze
+        nextMaze rot = implementRotate rotP cur rot maze
         nextPath rot = (x, y, rot) : path
 
     nextCur (x, y) maze = (x_, y_)
@@ -200,12 +208,12 @@ main = do
   pure verifyPixelModel
 
   pixValidPrecomp <- pure pixValidPrecomputed
-  putStrLn (seq pixValidPrecomputed "pixValid precomputed")
+  rotatePrecomp <- pure rotatePrecomputed
 
   input <- getContents
   -- putStrLn "input"
   -- putStrLn . render . parse $ input
   -- putStrLn "solve"
-  (solved, rotations) <- pure $ solve pixValidPrecomp . parse $ input
+  (solved, rotations) <- pure $ solve pixValidPrecomp rotatePrecomp . parse $ input
   -- putStrLn . printRot $ rotations
   putStrLn . render $ solved
