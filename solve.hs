@@ -17,6 +17,7 @@ type PixCheck = (Char, Char, Char, Char, Char, Rotation) -- 0,1,2,3 – directio
 type Maze = Mx.Matrix Char
 
 type Cursor = (Int, Int)
+type CursorRot = (Int, Int, Int)
 type Rotation = Int
 
 directions = [0, 1, 2, 3]
@@ -129,12 +130,9 @@ mazePixValid maze (x, y) rotation =
     curN 3 = (y, x - 1)
     curN 4 = (y, x)
 
-solve :: Maze -> (Maze, [(Int, Int)])
-solve input =
-  (maze, reverse rotations >>= (\(x, y, r) -> take r (repeat (x, y))))
+solve :: Maze -> (Maze, [CursorRot])
+solve = head . solve_ (1, 1) []
   where
-    (maze, rotations) = head $ solve_ (1, 1) [] input
-
     solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [(Int, Int, Int)])]
     solve_ cur@(x, y) path maze = do
       rotation <- directions
@@ -164,8 +162,12 @@ solve input =
         x_ = if jump then (nthLine + 1) `min` ncols maze else x - 1
         y_ = if jump then 1 + x_overflow else y + 1
 
-printRot :: [Cursor] -> String
-printRot = unlines . map (\(x, y) -> "rotate " ++ show (x - 1) ++ " " ++ show (y - 1))
+printRot :: [CursorRot] -> String
+printRot =
+  unlines
+  . map (\(x, y) -> "rotate " ++ show (x - 1) ++ " " ++ show (y - 1))
+  . (>>= (\(x, y, r) -> take r (repeat (x, y))))
+  . reverse
 
 main = do
   pure verifyPixelModel
