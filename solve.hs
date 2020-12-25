@@ -30,7 +30,7 @@ type RotatePrecomp = HashMap (Char, Rotation) Char
 (#!) = (HS.!)
 
 directions = [0, 1, 2, 3]
-rotations = directions
+rotations = directions -- nu tā sanāk
 
 charMapEntries =
   [ ('╹', [0])
@@ -144,12 +144,14 @@ pixValidPrecomputed = HS.fromList list
       pure (p1, p2, p3, p4, p5, r)
 
 -- given top and left pix is solved, verify this pix is valid after rotation
-mazePixValid :: PixValidPrecomp -> Maze -> Cursor -> Rotation -> Bool
-mazePixValid pixValidP maze (x, y) rotation =
-  check (charN 0, charN 1, charN 2, charN 3, charN 4, rotation)
+mazePixValid :: PixValidPrecomp -> Maze -> Cursor -> Char -> Rotation -> Bool
+mazePixValid pixValidP maze (x, y) this rotation =
+  check (charN 0, charN 1, charN 2, charN 3, this, rotation)
   where
-    -- check = (pixValidP #!)
-    check = pixValid -- XXX: precomputation skipped
+    check =
+      if usePixValidPrecomputed
+      then (pixValidP #!)
+      else pixValid
 
     charN d =
       if directionUncertain
@@ -163,16 +165,16 @@ mazePixValid pixValidP maze (x, y) rotation =
     curN 1 = (y, x + 1)
     curN 2 = (y + 1, x)
     curN 3 = (y, x - 1)
-    curN 4 = (y, x)
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> (Maze, [CursorRot])
 solve pixValidP rotP = head . solve_ (1, 1) []
   where
     solve_ :: Cursor -> [(Int, Int, Int)] -> Maze -> [(Maze, [(Int, Int, Int)])]
     solve_ cur@(x, y) path maze = do
-      rotation <- directions
+      this <- pure $ Mx.getElem y x maze
+      rotation <- chooseRotation this
 
-      if mazePixValid pixValidP maze cur rotation
+      if mazePixValid pixValidP maze cur this rotation
       -- if trace (show (x, y, rotation, nextCur cur maze)) pixValid maze cur rotation
       then
         (if x == ncols maze && y == nrows maze
@@ -181,13 +183,18 @@ solve pixValidP rotP = head . solve_ (1, 1) []
       else []
 
       where
-        traceBoard board =
-          if 't' == 't'
-          then board
-          else trace ("\x1b[H\x1b[2J" ++ (render board)) board
-
         nextMaze rot = implementRotate rotP cur rot maze
         nextPath rot = (x, y, rot) : path
+
+    chooseRotation '╋' = [0]
+    chooseRotation '┃' = [0,1]
+    chooseRotation '━' = [0,1]
+    chooseRotation _ = rotations
+
+    traceBoard board =
+      if 't' == 'f'
+      then board
+      else trace ("\x1b[H\x1b[2J" ++ (render board)) board
 
     nextCur (x, y) maze = (x_, y_)
       where
@@ -203,6 +210,8 @@ printRot =
   . map (\(x, y) -> "rotate " ++ show (x - 1) ++ " " ++ show (y - 1))
   . (>>= (\(x, y, r) -> take r (repeat (x, y))))
   . reverse
+
+usePixValidPrecomputed = False
 
 main = do
   pure verifyPixelModel
