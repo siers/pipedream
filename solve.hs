@@ -157,45 +157,46 @@ mazePixValid pixValidP maze solveds cur@(x, y) this rotation =
             then uncurry Mx.getElem (swap curDelta) maze
             else ' '
 
+chooseRotation :: Char -> Pix
+chooseRotation '╋' = [0]
+chooseRotation '┃' = [0,1]
+chooseRotation '━' = [0,1]
+chooseRotation _ = rotations
+
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
-solve pixValidP rotP = take 1 . solve_ (1, 1) Set.empty []
+solve pixValidP rotP = take 1 . solve_ 2 (1, 1) Set.empty []
   where
-    solve_ :: Cursor -> CursorSet -> [Cursor] -> Maze -> [Maze]
-    solve_ cur@(x, y) solveds continues maze = do
+    solve_ :: Direction -> Cursor -> CursorSet -> [(Cursor, Direction)] -> Maze -> [Maze]
+    solve_ origin cur@(x, y) solveds continues maze = do
       this <- pure $ Mx.getElem y x maze
       rotation <- mazePixValid pixValidP maze solveds cur this `filter` (chooseRotation this)
       -- canUseMutation = length rotations == 1
       solveRotation rotation (rotP #! (this, rotation))
 
       where
-        chooseRotation '╋' = [0]
-        chooseRotation '┃' = [0,1]
-        chooseRotation '━' = [0,1]
-        chooseRotation _ = rotations
-
         solveRotation :: Rotation -> Char -> [Maze]
         solveRotation rotation rotated =
           if Set.size solveds == matrixSize maze - 1
-          then [nextMaze]
+          then [maze']
           else do
-            (nextCursor, nextContinues) <- maybeToList $ uncons nextContinues
-            solve_ nextCursor nextSolveds nextContinues (traceBoard nextMaze)
+            ((cursor, origin), continues') <- maybeToList $ uncons continues'
+            solve_ origin cursor solveds' continues' (traceBoard maze')
 
           where
-            nextCursors = matrixBounded maze `filter` (cursorDelta cur <$> mapChar rotated)
-            nextSolveds = cur `Set.insert` solveds
-            nextContinues = dropWhile ((`Set.member` solveds)) (continues ++ nextCursors)
-            nextMaze = Mx.setElem rotated (y, x) maze
+            cursors' = (matrixBounded maze . fst) `filter` ((cursorDelta cur >>= (,)) <$> mapChar rotated)
+            solveds' = cur `Set.insert` solveds
+            continues' = dropWhile ((`Set.member` solveds) . fst) (continues ++ cursors')
+            maze' = Mx.setElem rotated (y, x) maze
 
             traceBoard board = if 't' == 'f' then board else trace traceStr board
               where
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                traceStr = clear ++ show (cur, nextContinues) ++ "\n" ++ renderWithPositions positions board
+                traceStr = clear ++ show (cur, continues') ++ "\n" ++ renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
-                  , ("34", nextSolveds)
-                  , ("32", Set.fromList nextContinues)
+                  , ("34", solveds')
+                  , ("32", Set.fromList $ fmap fst continues')
                   ]
 
 --
