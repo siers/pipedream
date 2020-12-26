@@ -281,7 +281,7 @@ solve pixValidP rotP maze =
             solve_ origin continue initial solveds' continues' (traceBoard maze')
 
           where
-            nRotations = length . (pixValidRotations' pixValidP maze solveds) . fst
+            nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
             withRotations = nRotations >>= (,)
 
             (nextFast, next) =
@@ -290,7 +290,7 @@ solve pixValidP rotP maze =
               . sortOn fst .  map withRotations $
                 cursorDeltasSafe maze cur directions
 
-            continues' = dropWhile ((`Set.member` solveds) . fst) $ nextFast ++ continues ++ next
+            continues' = dropWhile ((`Set.member` solveds) . fst) $ nextFast ++ next ++ continues
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
