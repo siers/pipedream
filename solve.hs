@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Monad (join, mplus)
+import Data.Bifunctor
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition)
@@ -280,19 +281,31 @@ solve pixValidP rotP maze =
             solve_ origin continue initial solveds' continues' (traceBoard maze')
 
           where
+            nRotations = length . (pixValidRotations' pixValidP maze solveds) . fst
+            withRotations = nRotations >>= (,)
+
             (nextFast, next) =
-              partition ((1 ==) . length . (pixValidRotations' pixValidP maze solveds) . fst) $
-                if (length $ take 2 initial) < 2
-                then cursorDeltasSafe maze cur (mapChar rotated)
-                else []
+              bimap (map snd) (map snd)
+              . partition ((1 >=) . fst)
+              . sortOn fst .  map withRotations $
+                cursorDeltasSafe maze cur (mapChar rotated)
+
+            nextFastFlip =
+              map snd
+              . filter ((1 >=) . fst)
+              . sortOn fst . map withRotations $
+                cursorDeltasSafe maze cur (flipPix $ mapChar rotated)
+
+            continues' = dropWhile ((`Set.member` solveds) . fst) $
+              nextFast ++ nextFastFlip ++ continues ++ next
+
             solveds' = cur `Set.insert` solveds
-            continues' = dropWhile ((`Set.member` solveds) . fst) (nextFast ++ continues ++ next)
             maze' = Mx.setElem rotated (y, x) maze
 
             traceBoard board = if 't' == 'f' then board else trace traceStr board
               where
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                traceStr = renderWithPositions positions board
+                traceStr = clear ++ renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
