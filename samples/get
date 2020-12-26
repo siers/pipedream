@@ -8,4 +8,4 @@ else
   sleep=10
 fi
 
-(echo -e "new $level\nmap"; sleep $sleep) | ws ws://maze.server.host/game-pipes/ 2>/dev/null | grep -v '<' > samples/$level
+(echo -e "new $level\nmap"; sleep $sleep) | ws ws://maze.server.host/game-pipes/ 2>/dev/null | grep -v '<' > samples/$level$suffix
