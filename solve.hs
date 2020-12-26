@@ -168,6 +168,10 @@ cursorDeltasSafeOrdered :: Maze -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafeOrdered m c p = filter (matrixBounded m . fst) $
   (cursorDelta c >>= (,)) `map` deltaOrder m c p
 
+-- just to be able to switch quickly to see if it's better
+cursorDeltasSafe :: Maze -> Cursor -> Pix -> [(Cursor, Direction)]
+cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
+
 --
 
 pixValid :: PixCheck -> Bool
@@ -222,7 +226,7 @@ solve pixValidP rotP = take 1 . solve_ 2 (1, 1) Set.empty []
             solve_ origin cursor solveds' continues' (traceBoard maze')
 
           where
-            cursors' = (cursorDeltasSafeOrdered maze cur (mapChar rotated))
+            cursors' = cursorDeltasSafe maze cur (mapChar rotated)
             solveds' = cur `Set.insert` solveds
             continues' = dropWhile ((`Set.member` solveds) . fst) (continues ++ cursors')
             maze' = Mx.setElem rotated (y, x) maze
@@ -230,8 +234,8 @@ solve pixValidP rotP = take 1 . solve_ 2 (1, 1) Set.empty []
             traceBoard board = if 't' == 'f' then board else trace traceStr board
               where
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                -- traceStr = clear ++ show (cur) ++ "\n" ++ renderWithPositions positions board
-                traceStr = clear ++ render board -- cheap
+                traceStr = clear ++ renderWithPositions positions board
+                -- traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
