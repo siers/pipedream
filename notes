@@ -86,6 +86,16 @@ i: ╸, ╹, ╺, ╻
 
 --
 
+2020-12-26-18:55:23
+1. Sides first in backtracking
+2. Solve edge first, sort by solvability
+3. Force unpointed
+4. Check stranded islands (jo dziļāk, jo dziļāk vērts rekursēt)
+5. Store origin in cursors
+6. Render cursor with list of sets per color
+
+--
+
 9f9a4fe
 runhaskell solve.hs 2>&1 < samples/2  15.52s user 2.79s system 59% cpu 30.526 total
 
