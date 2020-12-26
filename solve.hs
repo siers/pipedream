@@ -284,8 +284,8 @@ solve pixValidP rotP maze =
             nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
             withRotations = nRotations >>= (,)
 
-            (nextFast, next) =
-              bimap (map snd) (filter (flip elem (mapChar rotated) . snd) . map snd)
+            (nextFast, (next, bad)) =
+              bimap (map snd) (partition (flip elem (mapChar rotated) . snd) . map snd)
               . partition ((1 >=) . fst)
               . sortOn fst .  map withRotations $
                 cursorDeltasSafe maze cur directions
