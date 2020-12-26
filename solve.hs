@@ -2,7 +2,7 @@ module Main where
 
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, isSubsequenceOf, elemIndex, uncons, concat, find)
+import Data.List (sort, isSubsequenceOf, elemIndex, uncons, concat, find, (\\))
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, maybeToList)
@@ -104,6 +104,7 @@ rotateDir :: Int -> Direction -> Direction
 rotateDir n = (`mod` 4) . (+ n)
 
 flipDir = rotateDir 2
+flipPix = (directions \\)
 
 rotate :: Rotation -> Pix -> Pix
 rotate r = map (rotateDir r)
@@ -126,8 +127,46 @@ cursorDelta (x, y) 1 = (x + 1, y)
 cursorDelta (x, y) 2 = (x, y + 1)
 cursorDelta (x, y) 3 = (x - 1, y)
 
-cursorDeltaSafe :: Maze -> Cursor -> Direction -> [Cursor]
+cursorDeltaSafe :: Matrix a -> Cursor -> Direction -> [Cursor]
 cursorDeltaSafe maze c d = matrixBounded maze `filter` [cursorDelta c d]
+
+-- points to cursor's closest side to maze
+-- any offsets should be adjusted via dbgm output in ghci
+cursorMagnet :: Matrix a -> Cursor -> Direction
+cursorMagnet maze (x', y') =
+  if x > (h - y)
+  then if x > y then 1 else 2
+  else if x > y then 0 else 3
+  where
+    x = (fromIntegral x') * scale
+    y = fromIntegral y'
+    w = fromIntegral $ Mx.ncols maze
+    h = fromIntegral $ Mx.nrows maze
+    scale = h / w
+
+-- order continue' by going to sides first
+-- more efficent implementation: recurse and put flipDir as last
+deltaOrder :: Matrix a -> Cursor -> Pix -> Pix
+deltaOrder maze cur pix = order magnet \\ flipPix pix
+  where
+    magnet = cursorMagnet maze cur
+    order :: Direction -> Pix
+    order 0 = [2, 3, 1, 0]
+    order 1 = [3, 0, 2, 1]
+    order 2 = [0, 1, 3, 2]
+    order 3 = [1, 2, 0, 3]
+
+dbgm :: String
+dbgm = render $ Mx.matrix (nrows maze) (ncols maze) $ \cur ->
+  mapPix $ deltaOrder maze cur (flipPix [flipDir . cursorMagnet maze . swap $ cur])
+  -- (cursorMagnet maze . swap $ cur)
+  where
+    maze = Mx.matrix 20 15 (const 0 :: a -> Int)
+
+-- choose next directions at cursor for piece pointing at p directions
+cursorDeltasSafeOrdered :: Maze -> Cursor -> Pix -> [(Cursor, Direction)]
+cursorDeltasSafeOrdered m c p = filter (matrixBounded m . fst) $
+  (cursorDelta c >>= (,)) `map` deltaOrder m c p
 
 --
 
@@ -183,7 +222,7 @@ solve pixValidP rotP = take 1 . solve_ 2 (1, 1) Set.empty []
             solve_ origin cursor solveds' continues' (traceBoard maze')
 
           where
-            cursors' = (matrixBounded maze . fst) `filter` ((cursorDelta cur >>= (,)) <$> mapChar rotated)
+            cursors' = (cursorDeltasSafeOrdered maze cur (mapChar rotated))
             solveds' = cur `Set.insert` solveds
             continues' = dropWhile ((`Set.member` solveds) . fst) (continues ++ cursors')
             maze' = Mx.setElem rotated (y, x) maze
@@ -191,8 +230,8 @@ solve pixValidP rotP = take 1 . solve_ 2 (1, 1) Set.empty []
             traceBoard board = if 't' == 'f' then board else trace traceStr board
               where
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                traceStr = clear ++ show (cur, continues') ++ "\n" ++ renderWithPositions positions board
-                -- traceStr = clear ++ render board -- cheap
+                -- traceStr = clear ++ show (cur) ++ "\n" ++ renderWithPositions positions board
+                traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
