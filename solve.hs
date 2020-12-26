@@ -238,8 +238,9 @@ chooseRotation '┃' = [0,1]
 chooseRotation '━' = [0,1]
 chooseRotation _ = rotations
 
+-- this only will work if we add these to continues and solve subsolutions in parallel
 initialSet :: Maze -> [Cursor]
-initialSet maze =
+initialSet maze = take 1 $
   map (\(cur, _, _) -> cur)
   -- . (\x -> trace ((map (\(a,b,c) -> b) x) ++ show (map (\(a,b,c) -> a) x)) x)
   . sortOn (\(_, _, p) -> p)

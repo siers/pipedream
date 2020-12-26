@@ -93,6 +93,8 @@ i: ╸, ╹, ╺, ╻
 4. Check stranded islands (jo dziļāk, jo dziļāk vērts rekursēt)
 5. Store origin in cursors
 6. Render cursor with list of sets per color
+7. Subsolve regions around edges that don't touch each other, then combine partially solved solutions
+7.1. index partial sets by origin cursor
 
 --
 
