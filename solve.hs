@@ -1,8 +1,9 @@
 module Main where
 
+import Control.Monad (join, mplus)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, isSubsequenceOf, elemIndex, uncons, concat, find, (\\))
+import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\))
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, maybeToList)
@@ -40,10 +41,35 @@ matrixSize m = nrows m * ncols m
 matrixBounded :: Matrix a -> Cursor -> Bool
 matrixBounded m (x, y) = not $ (x < 1 || y < 1 || ncols m < x || nrows m < y)
 
+matrixBoundaryIndices :: Matrix a -> [(Int, Int)]
+matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cur@(y, x) ->
+  if x == 1 || y == 1 || x == ncols m || y == ncols m
+  then [swap cur]
+  else []
+
 --
 
 directions = [0, 1, 2, 3]
 rotations = directions -- nu tā sanāk
+
+edgePriority :: Map Char [Int]
+edgePriority = Map.fromList
+  [ ('╋', [5])
+  , ('┣', [4])
+  , ('┻', [4])
+  , ('┫', [4])
+  , ('┳', [4])
+  , ('┃', [3])
+  , ('━', [3])
+  , ('┛', [])
+  , ('┏', [])
+  , ('┓', [])
+  , ('┗', [])
+  , ('╺', [])
+  , ('╻', [])
+  , ('╸', [])
+  , ('╹', [])
+  ]
 
 charMapEntries =
   [ ('╹', [0])
@@ -206,11 +232,27 @@ chooseRotation '┃' = [0,1]
 chooseRotation '━' = [0,1]
 chooseRotation _ = rotations
 
-solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
-solve pixValidP rotP = take 1 . solve_ 2 (1, 1) Set.empty []
+initialSet :: Maze -> [Cursor]
+initialSet maze =
+  map (\(cur, _, _) -> cur)
+  -- . (\x -> trace ((map (\(a,b,c) -> b) x) ++ show (map (\(a,b,c) -> a) x)) x)
+  . sortOn (\(_, _, p) -> p)
+  $ onCur =<< (matrixBoundaryIndices maze)
   where
-    solve_ :: Direction -> Cursor -> CursorSet -> [(Cursor, Direction)] -> Maze -> [Maze]
-    solve_ origin cur@(x, y) solveds continues maze = do
+    onCur :: Cursor -> [(Cursor, Char, Int)]
+    onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
+      where elem = uncurry Mx.getElem (swap cur) maze
+
+solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
+solve pixValidP rotP maze =
+  take 1
+  . join
+  . maybeToList
+  . fmap (\(head, initial) -> solve_ head initial Set.empty [] maze)
+  $ uncons (initialSet maze)
+  where
+    solve_ :: Cursor -> [Cursor] -> CursorSet -> [Cursor] -> Maze -> [Maze]
+    solve_ cur@(x, y) initial solveds continues maze = do
       this <- pure $ Mx.getElem y x maze
       rotation <- mazePixValid pixValidP maze solveds cur this `filter` (chooseRotation this)
       -- canUseMutation = length rotations == 1
@@ -222,24 +264,30 @@ solve pixValidP rotP = take 1 . solve_ 2 (1, 1) Set.empty []
           if Set.size solveds == matrixSize maze - 1
           then [maze']
           else do
-            ((cursor, origin), continues') <- maybeToList $ uncons continues'
-            solve_ origin cursor solveds' continues' (traceBoard maze')
+            (cursor, initial', continues') <- maybeToList $
+              ((\(h, i) -> (h, i, continues')) <$> uncons initial)
+              `mplus`
+              ((\(h, c) -> (h, initial, c)) <$> uncons continues')
+            solve_ cursor initial' solveds' continues' (traceBoard maze')
 
           where
-            cursors' = cursorDeltasSafe maze cur (mapChar rotated)
+            cursors' =
+              if (length $ take 2 initial) < 2
+              then map fst $ cursorDeltasSafeOrdered maze cur (mapChar rotated)
+              else []
             solveds' = cur `Set.insert` solveds
-            continues' = dropWhile ((`Set.member` solveds) . fst) (continues ++ cursors')
+            continues' = dropWhile ((`Set.member` solveds)) (continues ++ cursors')
             maze' = Mx.setElem rotated (y, x) maze
 
             traceBoard board = if 't' == 'f' then board else trace traceStr board
               where
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                traceStr = clear ++ renderWithPositions positions board
-                -- traceStr = clear ++ render board -- cheap
+                -- traceStr = clear ++ renderWithPositions positions board
+                traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
-                  , ("32", Set.fromList $ fmap fst continues')
+                  , ("32", Set.fromList continues')
                   ]
 
 --
