@@ -3,7 +3,7 @@ module Main where
 import Control.Monad (join, mplus)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\))
+import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, maybeToList)
@@ -49,6 +49,8 @@ matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cu
 
 mxGetElem :: Int -> Int -> Matrix a -> a
 mxGetElem x y m = Mx.getElem y x m
+
+mxGetElem' = uncurry mxGetElem
 
 mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
 mxSetElem v (x, y) m = Mx.setElem v (y, x) m
@@ -216,12 +218,17 @@ pixValid (this, that, rotation, direction) =
       thatRequires :: Pix
       thatRequires = if that == ' ' then [] else mapChar that
 
--- given top and left pix is solved, verify this pix is valid after rotation
-mazePixValid :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Char -> Rotation -> Bool
-mazePixValid pixValidP maze solveds cur@(x, y) this rotation =
-  all checkDirection directions
+pixValidRotations :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Char -> Pix
+pixValidRotations pixValidP maze solveds cur@(x, y) this =
+  (\r -> all (checkDirection r) directions) `filter` chooseRotation this
   where
-    checkDirection d =
+    chooseRotation :: Char -> Pix
+    chooseRotation '╋' = [0]
+    chooseRotation '┃' = [0,1]
+    chooseRotation '━' = [0,1]
+    chooseRotation _ = rotations
+
+    checkDirection rotation d=
       if (not $ matrixBounded maze curDelta) || curDelta `Set.member` solveds
       then pixValidP #! (this, char, rotation, d)
       else True
@@ -232,11 +239,9 @@ mazePixValid pixValidP maze solveds cur@(x, y) this rotation =
             then uncurry mxGetElem curDelta maze
             else ' '
 
-chooseRotation :: Char -> Pix
-chooseRotation '╋' = [0]
-chooseRotation '┃' = [0,1]
-chooseRotation '━' = [0,1]
-chooseRotation _ = rotations
+pixValidRotations' :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Pix
+pixValidRotations' pvp maze solveds cur =
+  pixValidRotations pvp maze solveds cur (mxGetElem' cur maze)
 
 -- this only will work if we add these to continues and solve subsolutions in parallel
 initialSet :: Maze -> [Cursor]
@@ -261,7 +266,7 @@ solve pixValidP rotP maze =
     solve_ :: Direction -> Cursor -> [Cursor] -> CursorSet -> [(Cursor, Direction)] -> Maze -> [Maze]
     solve_ origin cur@(x, y) initial solveds continues maze = do
       this <- pure $ mxGetElem x y maze
-      rotation <- mazePixValid pixValidP maze solveds cur this `filter` (chooseRotation this)
+      rotation <- pixValidRotations pixValidP maze solveds cur this
       -- canUseMutation = length rotations == 1
       solveRotation rotation (rotP #! (this, rotation))
 
@@ -275,12 +280,13 @@ solve pixValidP rotP maze =
             solve_ origin continue initial solveds' continues' (traceBoard maze')
 
           where
-            cursors' =
-              if (length $ take 2 initial) < 2
-              then cursorDeltasSafe maze cur (mapChar rotated)
-              else []
+            (nextFast, next) =
+              partition ((1 ==) . length . (pixValidRotations' pixValidP maze solveds) . fst) $
+                if (length $ take 2 initial) < 2
+                then cursorDeltasSafe maze cur (mapChar rotated)
+                else []
             solveds' = cur `Set.insert` solveds
-            continues' = dropWhile ((`Set.member` solveds) . fst) (continues ++ cursors')
+            continues' = dropWhile ((`Set.member` solveds) . fst) (nextFast ++ continues ++ next)
             maze' = Mx.setElem rotated (y, x) maze
 
             traceBoard board = if 't' == 'f' then board else trace traceStr board
