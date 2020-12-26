@@ -2,7 +2,7 @@ module Main where
 
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, isSubsequenceOf, elemIndex, uncons, concat)
+import Data.List (sort, isSubsequenceOf, elemIndex, uncons, concat, find)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, maybeToList)
@@ -92,14 +92,16 @@ parse =
 render :: Maze -> String
 render = unlines . Mx.toLists
 
-renderWithPos :: Maze -> Cursor -> String
-renderWithPos maze target =
+renderWithPositions :: [(String, Set Cursor)] -> Maze -> String
+renderWithPositions targets maze =
   unlines
   . map concat
   . Mx.toLists
-  . Mx.mapPos (\cur c -> printf (if target == swap cur then "\x1b[31m%s\x1b[39m" else "%s") (c : []))
+  . Mx.mapPos (\cur c -> fmt cur (c : []))
   $ maze
-
+  where
+    color cur = fst <$> find (Set.member (swap cur) . snd) targets
+    fmt cur s = printf $ fromMaybe s . fmap (\c -> printf "\x1b[%sm%s\x1b[39m" c s) $ color cur
 
 -- C: n=1, CW: n=-1
 rotateDir :: Int -> Direction -> Direction
@@ -183,14 +185,18 @@ solve pixValidP rotP = take 1 . solve_ (1, 1) Set.empty Set.empty
           where
             nextCursors = Set.fromList $ matrixBounded maze `filter` (cursorDelta cur <$> mapChar rotated)
             nextSolveds = cur `Set.insert` solveds
-            nextContinues = (nextCursors `Set.union` continues) `Set.difference` solveds
+            nextContinues = (continues `Set.union` nextCursors) `Set.difference` solveds
             nextMaze = Mx.setElem rotated (y, x) maze
 
-            traceBoard board =
-              if 't' == 'f'
-              then board
-              else trace (show (cur, nextContinues) ++ "," ++ rotated:[] ++ "\n" ++ renderWithPos board cur) board
-              -- else trace ("\x1b[H\x1b[2J" ++ (render board)) board
+            traceBoard board = if 't' == 'f' then board else trace traceStr board
+              where
+                traceStr = show (cur, nextContinues) ++ "\n" ++ renderWithPositions positions board
+                -- ("\x1b[H\x1b[2J" ++ (render board))
+                positions =
+                  [ ("31", Set.singleton cur)
+                  , ("34", nextSolveds)
+                  , ("32", nextContinues)
+                  ]
 
 --
 
