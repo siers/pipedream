@@ -96,12 +96,12 @@ i: ╸, ╹, ╺, ╻
 --
 
 2020-12-26-18:55:23
-1. Sides first in backtracking
+✔ 1. Sides first in backtracking
 2. Solve edge first, sort by solvability
-3. Force unpointed
-4. Check stranded islands (jo dziļāk, jo dziļāk vērts rekursēt)
-5. Store origin in cursors
-6. Render cursor with list of sets per color
+✔ 3. Force unpointed
+✔. Check stranded islands (jo dziļāk, jo dziļāk vērts rekursēt)
+✔. Store origin in cursors
+✔. Render cursor with list of sets per color
 7. Subsolve regions around edges that don't touch each other, then combine partially solved solutions
 7.1. index partial sets by origin cursor
 

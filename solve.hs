@@ -285,19 +285,12 @@ solve pixValidP rotP maze =
             withRotations = nRotations >>= (,)
 
             (nextFast, next) =
-              bimap (map snd) (map snd)
+              bimap (map snd) (filter (flip elem (mapChar rotated) . snd) . map snd)
               . partition ((1 >=) . fst)
               . sortOn fst .  map withRotations $
-                cursorDeltasSafe maze cur (mapChar rotated)
+                cursorDeltasSafe maze cur directions
 
-            nextFastFlip =
-              map snd
-              . filter ((1 >=) . fst)
-              . sortOn fst . map withRotations $
-                cursorDeltasSafe maze cur (flipPix $ mapChar rotated)
-
-            continues' = dropWhile ((`Set.member` solveds) . fst) $
-              nextFast ++ nextFastFlip ++ continues ++ next
+            continues' = dropWhile ((`Set.member` solveds) . fst) $ nextFast ++ continues ++ next
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
