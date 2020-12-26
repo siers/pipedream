@@ -47,6 +47,12 @@ matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cu
   then [swap cur]
   else []
 
+mxGetElem :: Int -> Int -> Matrix a -> a
+mxGetElem x y m = Mx.getElem y x m
+
+mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
+mxSetElem v (x, y) m = Mx.setElem v (y, x) m
+
 --
 
 directions = [0, 1, 2, 3]
@@ -223,7 +229,7 @@ mazePixValid pixValidP maze solveds cur@(x, y) this rotation =
           curDelta = cursorDelta cur d
           char =
             if matrixBounded maze curDelta
-            then uncurry Mx.getElem (swap curDelta) maze
+            then uncurry mxGetElem curDelta maze
             else ' '
 
 chooseRotation :: Char -> Pix
@@ -241,7 +247,7 @@ initialSet maze =
   where
     onCur :: Cursor -> [(Cursor, Char, Int)]
     onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
-      where elem = uncurry Mx.getElem (swap cur) maze
+      where elem = uncurry mxGetElem cur maze
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
@@ -253,7 +259,7 @@ solve pixValidP rotP maze =
   where
     solve_ :: Cursor -> [Cursor] -> CursorSet -> [Cursor] -> Maze -> [Maze]
     solve_ cur@(x, y) initial solveds continues maze = do
-      this <- pure $ Mx.getElem y x maze
+      this <- pure $ mxGetElem x y maze
       rotation <- mazePixValid pixValidP maze solveds cur this `filter` (chooseRotation this)
       -- canUseMutation = length rotations == 1
       solveRotation rotation (rotP #! (this, rotation))
@@ -304,7 +310,7 @@ computeRotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input
   where
     cursorRot (y, x) = (x, y, get input `rotations` get solved)
       where
-        get = Mx.getElem y x
+        get = mxGetElem x y
         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
 
 rotatePrecomputed :: RotatePrecomp
