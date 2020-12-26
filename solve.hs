@@ -240,26 +240,26 @@ chooseRotation _ = rotations
 
 -- this only will work if we add these to continues and solve subsolutions in parallel
 initialSet :: Maze -> [Cursor]
-initialSet maze = take 1 $
-  map (\(cur, _, _) -> cur)
-  -- . (\x -> trace ((map (\(a,b,c) -> b) x) ++ show (map (\(a,b,c) -> a) x)) x)
-  . sortOn (\(_, _, p) -> p)
-  $ onCur =<< (matrixBoundaryIndices maze)
-  where
-    onCur :: Cursor -> [(Cursor, Char, Int)]
-    onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
-      where elem = uncurry mxGetElem cur maze
+initialSet maze = take 1 $ [(1,1)]
+  -- map (\(cur, _, _) -> cur)
+  -- -- . (\x -> trace ((map (\(a,b,c) -> b) x) ++ show (map (\(a,b,c) -> a) x)) x)
+  -- . sortOn (\(_, _, p) -> p)
+  -- $ onCur =<< (matrixBoundaryIndices maze)
+  -- where
+  --   onCur :: Cursor -> [(Cursor, Char, Int)]
+  --   onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
+  --     where elem = uncurry mxGetElem cur maze
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
   take 1
   . join
   . maybeToList
-  . fmap (\(head, initial) -> solve_ head initial Set.empty [] maze)
+  . fmap (\(head, initial) -> solve_ 0 head initial Set.empty [] maze)
   $ uncons (initialSet maze)
   where
-    solve_ :: Cursor -> [Cursor] -> CursorSet -> [Cursor] -> Maze -> [Maze]
-    solve_ cur@(x, y) initial solveds continues maze = do
+    solve_ :: Direction -> Cursor -> [Cursor] -> CursorSet -> [(Cursor, Direction)] -> Maze -> [Maze]
+    solve_ origin cur@(x, y) initial solveds continues maze = do
       this <- pure $ mxGetElem x y maze
       rotation <- mazePixValid pixValidP maze solveds cur this `filter` (chooseRotation this)
       -- canUseMutation = length rotations == 1
@@ -271,30 +271,27 @@ solve pixValidP rotP maze =
           if Set.size solveds == matrixSize maze - 1
           then [maze']
           else do
-            (cursor, initial', continues') <- maybeToList $
-              ((\(h, i) -> (h, i, continues')) <$> uncons initial)
-              `mplus`
-              ((\(h, c) -> (h, initial, c)) <$> uncons continues')
-            solve_ cursor initial' solveds' continues' (traceBoard maze')
+            ((continue, origin), continues') <- maybeToList $ uncons continues'
+            solve_ origin continue initial solveds' continues' (traceBoard maze')
 
           where
             cursors' =
               if (length $ take 2 initial) < 2
-              then map fst $ cursorDeltasSafeOrdered maze cur (mapChar rotated)
+              then cursorDeltasSafe maze cur (mapChar rotated)
               else []
             solveds' = cur `Set.insert` solveds
-            continues' = dropWhile ((`Set.member` solveds)) (continues ++ cursors')
+            continues' = dropWhile ((`Set.member` solveds) . fst) (continues ++ cursors')
             maze' = Mx.setElem rotated (y, x) maze
 
             traceBoard board = if 't' == 'f' then board else trace traceStr board
               where
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                -- traceStr = clear ++ renderWithPositions positions board
-                traceStr = clear ++ render board -- cheap
+                traceStr = renderWithPositions positions board
+                -- traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
-                  , ("32", Set.fromList continues')
+                  , ("32", Set.fromList $ map fst continues')
                   ]
 
 --

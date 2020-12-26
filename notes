@@ -51,6 +51,15 @@ ws ws://maze.server.host/game-pipes/
       trace (show (d, rot, "//", filter (flipDir d ==) thisRequires, filter (flipDir d ==) thatRequires)) $
       filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
 
+            killStrandedSides :: [()]
+            killStrandedSides =
+              if any stranded $ cursorDeltasSafe maze cur unpointed
+              then []
+              else [()]
+              where
+                unpointed = flipPix $ mapChar rotated
+                stranded = cursorDeltasSafe maze
+
 --
 
 I: ━, ┃
