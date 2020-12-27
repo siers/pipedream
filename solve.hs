@@ -290,22 +290,19 @@ initialSet maze =
     onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
       where elem = uncurry mxGetElem cur maze
 
-
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
   take 1
-  . join
-  . maybeToList
-  . fmap (\(edge, initial) ->
-    rights $ solve'' (-1) 0 (initialCursor edge) initial Set.empty [] maze)
-  $ uncons (initialSet maze)
+  . rights
+  $ solve'' (-1) 0 (initialCursor `map` (initialSet maze)) Set.empty maze
   where
     initialCursor :: Cursor -> Continue
     initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True)
       where elem = mxGetElem x y maze
 
-    solve'' :: Int -> Int -> Continue -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
-    solve'' lifespan iter (_, cur@(x, y), origin, this, _) initial solveds continues maze =
+    solve'' :: Int -> Int -> [Continue] -> CursorSet -> Maze -> [Either () Maze]
+    solve'' _ _ [] _ _ = []
+    solve'' lifespan iter ((_, cur@(x, y), origin, this, _): continues) solveds maze =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze solveds cur this
         rotation <- rotations
@@ -318,9 +315,7 @@ solve pixValidP rotP maze =
         solveRotation rotation rotated =
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
-          else do
-            (continue, continues'') <- maybeToList $ uncons continues'
-            solve'' lifespan (iter + length rotations) continue initT solveds' continues'' (traceBoard maze')
+          else solve'' lifespan (iter + length rotations) continues' solveds' (traceBoard maze')
 
           where
             nRotations :: Cursor -> Char -> Bool -> Int
