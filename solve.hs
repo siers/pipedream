@@ -300,8 +300,16 @@ solve pixValidP rotP maze =
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
 
-            traceBoard board = if 't' == 'f' then board else trace traceStr board
+            traceBoard board =
+              if 't' == 'f'
+              then if 't' == 'f' && Set.size solveds `mod` 50 == 0
+                then trace solvedStr board
+                else board
+              else trace traceStr board
+
               where
+                percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
+                solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
                 -- traceStr = show (nextFast, continues) ++ "\n" ++ renderWithPositions positions board
                 traceStr = clear ++ renderWithPositions positions board
