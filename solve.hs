@@ -349,8 +349,9 @@ solve pixValidP rotP maze =
               $ cursorDeltasSafe maze cur directions
 
             continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues)
-            -- sortContinues = sortOn sel1
-            sortContinues = sortOn (\c -> (sel6 c, sel1 c, cursorDepth (sel2 c) cur))
+            -- sortContinues = sortOn sel6
+            sortContinues = sortOn (\c -> (sel6 c, sel1 c))
+            -- sortContinues = sortOn (\c -> (sel6 c, sel1 c, cursorDepth (sel2 c) cur))
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
@@ -362,7 +363,7 @@ solve pixValidP rotP maze =
                 then trace solvedStr board
                 else board
               else
-                if 1 == 1 && iter `mod` 500 == 0
+                if 1 == 1 && iter `mod` 200 == 0
                 then trace traceStr board
                 else board
 
