@@ -12,6 +12,7 @@ import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, maybeToList)
 import Data.Set (Set)
+import Data.Tuple.Select
 import Data.Tuple (swap)
 import Debug.Trace
 import qualified Data.HashMap.Strict as HS
@@ -35,7 +36,7 @@ type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
-type Continue = (Int, Cursor, Direction) -- (# valid rotations, ,)
+type Continue = (Int, Cursor, Direction, Char) -- (# valid rotations, ,)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -66,10 +67,6 @@ unconsMay a = (fst <$> uncons a, drop 1 a)
 
 unconsList :: [a] -> ([a], [a])
 unconsList = fromMaybe (([], [])) . fmap (bimap return id) . uncons
-
-fst3 (a, _, _) = a
-snd3 (_, a, _) = a
-thd3 (_, _, a) = a
 
 --
 
@@ -316,26 +313,35 @@ solve pixValidP rotP maze =
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
           else do
-            ((_, continue, origin), continues'') <- maybeToList $ uncons continues'
+            ((_, continue, origin, _), continues'') <- maybeToList $ uncons continues'
             solve'' lifespan (iter + length rotations) origin continue initT solveds' continues'' (traceBoard maze')
 
           where
-            nRotations :: Cursor -> Int
-            nRotations c = if c `elem` initH then 0 else length $ pixValidRotations' pixValidP maze solveds' c
-            withRotations :: (Cursor, Direction) -> (Int, Cursor, Direction)
-            withRotations (c, d) = (nRotations c, c, d)
+            nRotations :: Cursor -> Char -> Int
+            nRotations c p =
+              if c `elem` initH -- || p `elem` "╹╸╻╺"
+              then 0
+              else length $ pixValidRotations' pixValidP maze solveds' c
+
+            cursorToContinue :: (Cursor, Direction) -> Continue
+            cursorToContinue (c, d) =
+              ( nRotations c char
+              , c
+              , d
+              , char)
+              where char = mxGetElem x y maze
 
             next =
-              filter (\(choices, c, d) -> choices < 2 || d `elem` mapChar rotated)
-              . map withRotations
+              filter (\(choices, c, d, p) -> choices < 2 || d `elem` mapChar rotated)
+              . map cursorToContinue
               $ (cursorDeltasSafe maze cur directions) ++ ((, 0) <$> initH)
 
             (initH, initT) = unconsList initial
             (contHead, contTail) = unconsList continues
 
-            continues' = ((`Set.member` solveds) . snd3) `dropWhile` (sortContinues $ next ++ continues)
-            -- sortContinues = sortOn fst3
-            sortContinues = sortOn (\(n, next, _) -> (n, (cursorDepth next cur)))
+            continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues)
+            -- sortContinues = sortOn sel1
+            sortContinues = sortOn (\(n, next, _, _) -> (n, (cursorDepth next cur)))
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
@@ -347,8 +353,8 @@ solve pixValidP rotP maze =
                 then trace solvedStr board
                 else board
               else
-                if 't' == 't'
-                -- if 't' == 'f' && iter `mod` 1500 == 0
+                -- if 't' == 't'
+                if 't' == 't' && iter `mod` 500 == 0
                 then trace traceStr board
                 else board
 
@@ -360,7 +366,7 @@ solve pixValidP rotP maze =
                 traceStr = clear ++ renderWithPositions positions board
                 -- traceStr = renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
-                (contFast, contSlow) = bimap (map snd3) (map snd3) $ partition ((< 2) . fst3) $ continues'
+                (contFast, contSlow) = bimap (map sel2) (map sel2) $ partition ((< 2) . sel1) $ continues'
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
