@@ -36,8 +36,8 @@ type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
--- (# valid rotations, cursor, origin, value, directly pointed)
-type Continue = (Int, Cursor, Direction, Char, Bool)
+-- (# valid rotations, cursor, origin, value, directly pointed, ambiguous)
+type Continue = (Int, Cursor, Direction, Char, Bool, Bool)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -297,12 +297,12 @@ solve pixValidP rotP maze =
   $ solve'' (-1) 0 (initialCursor `map` (initialSet maze)) Set.empty maze
   where
     initialCursor :: Cursor -> Continue
-    initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True)
+    initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True, False)
       where elem = mxGetElem x y maze
 
     solve'' :: Int -> Int -> [Continue] -> CursorSet -> Maze -> [Either () Maze]
     solve'' _ _ [] _ _ = []
-    solve'' lifespan iter ((_, cur@(x, y), origin, this, _): continues) solveds maze =
+    solve'' lifespan iter ((_, cur@(x, y), origin, this, _, _): continues) solveds maze =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze solveds cur this
         rotation <- rotations
@@ -318,35 +318,34 @@ solve pixValidP rotP maze =
           else solve'' lifespan (iter + length rotations) continues' solveds' (traceBoard maze')
 
           where
-            nRotations :: Cursor -> Char -> Bool -> Int
-            nRotations c p direct =
-              if c `elem` initH
+            nRotations :: Cursor -> Char -> Bool -> Bool -> Int
+            nRotations c p direct ambig =
+              if not ambig
               then 0
               else length $ pixValidRotations' pixValidP maze solveds' c
 
             cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
             cursorToContinue pix maze (c@(x, y), o) =
-              ( nRotations c char direct
+              ( nRotations c char direct True
               , c
               , o
               , char
               , direct
+              , True
               )
               where
                 char = mxGetElem x y maze
                 direct = o `elem` pix
 
             next =
-              filter (\(choices, c, o, p, d) -> choices < 2 || d)
+              filter (\(choices, c, o, p, d, amb) -> choices < 2 || d)
               . map (cursorToContinue (mapChar rotated) maze')
-              $ (cursorDeltasSafe maze cur directions) ++ ((, 0) <$> initH)
-
-            (initH, initT) = unconsList initial
-            (contHead, contTail) = unconsList continues
+              . filter (not . (`Set.member` solveds) . fst)
+              $ cursorDeltasSafe maze cur directions
 
             continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues)
             -- sortContinues = sortOn sel1
-            sortContinues = sortOn (\c -> (sel1 c, cursorDepth (sel2 c) cur))
+            sortContinues = sortOn (\c -> (sel6 c, sel1 c, cursorDepth (sel2 c) cur))
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
@@ -359,7 +358,7 @@ solve pixValidP rotP maze =
                 else board
               else
                 -- if 't' == 't'
-                if 't' == 't' && iter `mod` 500 == 0
+                if 't' == 't' && iter `mod` 1000 == 0
                 then trace traceStr board
                 else board
 
@@ -371,12 +370,13 @@ solve pixValidP rotP maze =
                 traceStr = clear ++ renderWithPositions positions board
                 -- traceStr = renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
-                (contFast, contSlow) = bimap (map sel2) (map sel2) $ partition ((< 2) . sel1) $ continues'
+                contFast = map sel2 . filter ((== 1) . sel1) $ continues'
+                contSlow = map sel2 . filter ((>= 2) . sel1) $ continues'
                 positions =
-                  [ ("31", Set.singleton cur)
+                  [ ("33", Set.singleton cur)
                   , ("34", solveds')
-                  , ("35", Set.fromList $ contFast)
-                  , ("32", Set.fromList $ contSlow)
+                  , ("35", Set.fromList contFast)
+                  , ("32", Set.fromList contSlow)
                   ]
 
 --
