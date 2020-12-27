@@ -35,7 +35,7 @@ type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
-type Continue = (Cursor, Direction)
+type Continue = (Int, Cursor, Direction) -- (# valid rotations, ,)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -66,6 +66,10 @@ unconsMay a = (fst <$> uncons a, drop 1 a)
 
 unconsList :: [a] -> ([a], [a])
 unconsList = fromMaybe (([], [])) . fmap (bimap return id) . uncons
+
+fst3 (a, _, _) = a
+snd3 (_, a, _) = a
+thd3 (_, _, a) = a
 
 --
 
@@ -312,30 +316,27 @@ solve pixValidP rotP maze =
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
           else do
-            ((continue, origin), continues'') <- maybeToList $ uncons continues'
+            ((_, continue, origin), continues'') <- maybeToList $ uncons continues'
             solve'' lifespan (iter + length rotations) origin continue initT solveds' continues'' (traceBoard maze')
 
           where
-            nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
-            withRotations = nRotations >>= (,)
+            nRotations :: Cursor -> Int
+            nRotations c = if c `elem` initH then 0 else length $ pixValidRotations' pixValidP maze solveds' c
+            withRotations :: (Cursor, Direction) -> (Int, Cursor, Direction)
+            withRotations (c, d) = (nRotations c, c, d)
 
-            ((edge, nextFast), (next, bad)) =
-              bimap
-                (partition ((`elem` initH) . fst) . map snd)
-                (partition (flip elem (mapChar rotated) . snd) . map snd)
-              . partition ((1 >=) . fst)
-              . sortOn fst .  map withRotations
-              $ fromMaybe (cursorDeltasSafe maze cur directions) ((: []) . (, 0) <$> initH)
+            next =
+              filter (\(choices, c, d) -> choices < 2 || d `elem` mapChar rotated)
+              . sortOn fst3 . map withRotations
+              $ (cursorDeltasSafe maze cur directions) ++ ((, 0) <$> initH)
 
-            (initH, initT) = unconsMay initial
+            (initH, initT) = unconsList initial
             (contHead, contTail) = unconsList continues
 
-            continues' = dropWhile ((`Set.member` solveds) . fst) $
-              edge ++ nextFast ++ contHead ++ next ++ contTail -- <1s
-              -- nextFast ++ contHead ++ next ++ contTail -- <1s
-              -- sortOn fst nextFast ++ continueHead ++ next ++ continuesTail -- 4s
-              -- nextFast ++ next ++ continues -- 8s
-              -- nextFast ++ continues ++ next -- 16s
+            continues' =
+              ((`Set.member` solveds) . snd3)
+              `dropWhile`
+              (sort $ next ++ continues)
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
@@ -347,7 +348,8 @@ solve pixValidP rotP maze =
                 then trace solvedStr board
                 else board
               else
-                if 't' == 'f' && iter `mod` 1500 == 0
+                if 't' == 't'
+                -- if 't' == 'f' && iter `mod` 1500 == 0
                 then trace traceStr board
                 else board
 
@@ -355,16 +357,15 @@ solve pixValidP rotP maze =
                 percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
                 solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                -- traceStr = show (nextFast, continues) ++ "\n" ++ renderWithPositions positions board
+                -- traceStr = (rotated:[]) ++ show (rotation, continues') ++ "\n" ++ renderWithPositions positions board
                 traceStr = clear ++ renderWithPositions positions board
                 -- traceStr = renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
-                  , ("35", Set.fromList $ map fst nextFast)
-                  -- , ("33", Set.fromList $ map fst bad)
-                  , ("32", Set.fromList $ map fst continues')
+                  , ("35", Set.fromList . map snd3 . filter ((< 2) . fst3) $ continues')
+                  , ("32", Set.fromList . map snd3 . filter ((>= 2) . fst3) $ continues')
                   ]
 
 --
