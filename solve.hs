@@ -36,7 +36,8 @@ type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
-type Continue = (Int, Cursor, Direction, Char) -- (# valid rotations, ,)
+-- (# valid rotations, cursor, origin, value, directly pointed)
+type Continue = (Int, Cursor, Direction, Char, Bool)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -313,27 +314,31 @@ solve pixValidP rotP maze =
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
           else do
-            ((_, continue, origin, _), continues'') <- maybeToList $ uncons continues'
+            ((_, continue, origin, _, this'), continues'') <- maybeToList $ uncons continues'
             solve'' lifespan (iter + length rotations) origin continue initT solveds' continues'' (traceBoard maze')
 
           where
-            nRotations :: Cursor -> Char -> Int
-            nRotations c p =
-              if c `elem` initH -- || p `elem` "╹╸╻╺"
+            nRotations :: Cursor -> Char -> Bool -> Int
+            nRotations c p direct =
+              if c `elem` initH
               then 0
               else length $ pixValidRotations' pixValidP maze solveds' c
 
-            cursorToContinue :: (Cursor, Direction) -> Continue
-            cursorToContinue (c, d) =
-              ( nRotations c char
+            cursorToContinue :: Pix -> (Cursor, Direction) -> Continue
+            cursorToContinue pix (c, o) =
+              ( nRotations c char direct
               , c
-              , d
-              , char)
-              where char = mxGetElem x y maze
+              , o
+              , char
+              , direct
+              )
+              where
+                char = mxGetElem x y maze
+                direct = o `elem` pix
 
             next =
-              filter (\(choices, c, d, p) -> choices < 2 || d `elem` mapChar rotated)
-              . map cursorToContinue
+              filter (\(choices, c, o, p, d) -> choices < 2 || d)
+              . map (cursorToContinue (mapChar rotated))
               $ (cursorDeltasSafe maze cur directions) ++ ((, 0) <$> initH)
 
             (initH, initT) = unconsList initial
@@ -341,7 +346,7 @@ solve pixValidP rotP maze =
 
             continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues)
             -- sortContinues = sortOn sel1
-            sortContinues = sortOn (\(n, next, _, _) -> (n, (cursorDepth next cur)))
+            sortContinues = sortOn (\c -> (sel1 c, cursorDepth (sel2 c) cur))
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
