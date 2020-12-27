@@ -1,3 +1,5 @@
+{-# LANGUAGE TupleSections #-}
+
 module Main where
 
 import Control.Monad (join, mplus)
@@ -199,12 +201,12 @@ dbgm = render $ Mx.matrix (nrows maze) (ncols maze) $ \cur ->
     maze = Mx.matrix 20 15 (const 0 :: a -> Int)
 
 -- choose next directions at cursor for piece pointing at p directions
-cursorDeltasSafeOrdered :: Maze -> Cursor -> Pix -> [(Cursor, Direction)]
+cursorDeltasSafeOrdered :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafeOrdered m c p = filter (matrixBounded m . fst) $
   (cursorDelta c >>= (,)) `map` deltaOrder m c p
 
 -- just to be able to switch quickly to see if it's better
-cursorDeltasSafe :: Maze -> Cursor -> Pix -> [(Cursor, Direction)]
+cursorDeltasSafe :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
 
 --
@@ -229,7 +231,7 @@ pixValidRotations pixValidP maze solveds cur@(x, y) this =
     chooseRotation '━' = [0,1]
     chooseRotation _ = rotations
 
-    checkDirection rotation d=
+    checkDirection rotation d =
       if (not $ matrixBounded maze curDelta) || curDelta `Set.member` solveds
       then pixValidP #! (this, char, rotation, d)
       else True
@@ -244,17 +246,15 @@ pixValidRotations' :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Pix
 pixValidRotations' pvp maze solveds cur =
   pixValidRotations pvp maze solveds cur (mxGetElem' cur maze)
 
--- this only will work if we add these to continues and solve subsolutions in parallel
 initialSet :: Maze -> [Cursor]
-initialSet maze = take 1 $ [(1,1)]
-  -- map (\(cur, _, _) -> cur)
-  -- -- . (\x -> trace ((map (\(a,b,c) -> b) x) ++ show (map (\(a,b,c) -> a) x)) x)
-  -- . sortOn (\(_, _, p) -> p)
-  -- $ onCur =<< (matrixBoundaryIndices maze)
-  -- where
-  --   onCur :: Cursor -> [(Cursor, Char, Int)]
-  --   onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
-  --     where elem = uncurry mxGetElem cur maze
+initialSet maze =
+  map (\(cur, _, _) -> cur)
+  . sortOn (\(_, _, p) -> p)
+  $ onCur =<< (matrixBoundaryIndices maze)
+  where
+    onCur :: Cursor -> [(Cursor, Char, Int)]
+    onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
+      where elem = uncurry mxGetElem cur maze
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
@@ -277,8 +277,8 @@ solve pixValidP rotP maze =
           if Set.size solveds == matrixSize maze - 1
           then [maze']
           else do
-            ((continue, origin), continues') <- maybeToList $ uncons continues'
-            solve_ origin continue initial solveds' continues' (traceBoard maze')
+            ((continue, origin), continues'') <- maybeToList $ uncons continues'
+            solve_ origin continue [] solveds' continues'' (traceBoard maze')
 
           where
             nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
@@ -287,10 +287,15 @@ solve pixValidP rotP maze =
             (nextFast, (next, bad)) =
               bimap (map snd) (partition (flip elem (mapChar rotated) . snd) . map snd)
               . partition ((1 >=) . fst)
-              . sortOn fst .  map withRotations $
-                cursorDeltasSafe maze cur directions
+              . sortOn fst .  map withRotations
+              . ((map (, 0) initial) ++)
+              $ cursorDeltasSafe maze cur directions
 
-            continues' = dropWhile ((`Set.member` solveds) . fst) $ nextFast ++ next ++ continues
+            (continueHead, continuesTail) = fromMaybe (([], [])) . fmap (bimap return id) $ uncons continues
+            continues' = dropWhile ((`Set.member` solveds) . fst) $
+              nextFast ++ continueHead ++ next ++ continuesTail
+              -- nextFast ++ next ++ continues
+              -- nextFast ++ continues ++ next
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
@@ -298,11 +303,14 @@ solve pixValidP rotP maze =
             traceBoard board = if 't' == 'f' then board else trace traceStr board
               where
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
+                -- traceStr = show (nextFast, continues) ++ "\n" ++ renderWithPositions positions board
                 traceStr = clear ++ renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
+                  , ("35", Set.fromList $ map fst nextFast)
+                  -- , ("33", Set.fromList $ map fst bad)
                   , ("32", Set.fromList $ map fst continues')
                   ]
 

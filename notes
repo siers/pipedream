@@ -114,6 +114,8 @@ runhaskell solve.hs 2>&1 < samples/2  15.52s user 2.79s system 59% cpu 30.526 to
 runhaskell solve.hs 2>&1 < samples/2  74.92s user 3.69s system 84% cpu 1:33.56 total
 (actual solving timed with phone: 30s... same as with usePixValidPrecomputed = False)
 
+./solve < samples/2-2  4.36s user 0.02s system 99% cpu 4.380 total
+
 --
 
 % samples/get 1; runhaskell solve.hs 2>&1 < samples/1
