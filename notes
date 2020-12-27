@@ -60,6 +60,21 @@ ws ws://hometask.eg1236.com/game-pipes/
                 unpointed = flipPix $ mapChar rotated
                 stranded = cursorDeltasSafe maze
 
+    -- maze = Mx.mapPos (\_ -> fst . (canonicalRotations !)) maze'
+    -- () signals fialure
+    -- badContinues :: [Continue] -> CursorSet -> Maze -> Bool
+    -- badContinues continues solveds maze =
+    --   any null . (\x -> trace (show ("subsolves:", x)) x) $ do
+    --     c@(h, o) <- take 20 . drop 1 $ continues
+    --     -- solve'' 100 0 o h [] solveds (continues \\ [c]) maze
+    --     (pure $ solve'' 100 0 o (t h) [] solveds (continues \\ [c]) maze) :: [[Either () Maze]]
+
+        -- z <- seq (t (lifespan /= (-1), iter `mod` 5 == 0, badContinues continues solveds maze)) $
+        --   if lifespan /= (-1) && iter `mod` 5 == 0 && badContinues continues solveds maze
+        --   then []
+        --   else [()]
+        -- z <- if lifespan > 0 then trace (show ("trying", lifespan, iter, rotations)) [()] else [()]
+
 --
 
 I: ━, ┃
