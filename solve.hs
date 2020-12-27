@@ -242,9 +242,9 @@ cursorDeltasSafe :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
 
 -- cursor in the middle is zero 0, the closer to the edge, the bigger the value
-cursorDepth :: Matrix a -> Cursor -> Int
-cursorDepth m (x, y) = (p $ x - (ncols m `div` 2)) * (p $ y - (nrows m `div` 2))
-  where p x = x -- + if x == 0 then 1 else 0
+cursorDepth :: Cursor -> Cursor -> Int
+cursorDepth from@(i, j) (x, y) = (p $ x - i) * (p $ y - j)
+  where p x = x + if x == 0 then 1 else 0
 
 --
 
@@ -327,7 +327,7 @@ solve pixValidP rotP maze =
 
             next =
               filter (\(choices, c, d) -> choices < 2 || d `elem` mapChar rotated)
-              . sortOn fst3 . map withRotations
+              . map withRotations
               $ (cursorDeltasSafe maze cur directions) ++ ((, 0) <$> initH)
 
             (initH, initT) = unconsList initial
@@ -336,7 +336,8 @@ solve pixValidP rotP maze =
             continues' =
               ((`Set.member` solveds) . snd3)
               `dropWhile`
-              (sort $ next ++ continues)
+              (sortOn fst3 $ next ++ continues)
+              -- (sortOn (\(n, next, _) -> (n, cursorDepth next cur)) $ next ++ continues)
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
