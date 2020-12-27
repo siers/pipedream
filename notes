@@ -131,6 +131,19 @@ i: ╸, ╹, ╺, ╻
 
 --
 
+2020-12-27-20:02:40
+1. lifecycle decreasing resulting in partial solutions list and solve'
+2. calculate unambiguous pieces
+3. share solutions
+4. maze'
+5. solve indirect ambiguous for failure
+6. solve'' :: -> Either [PartialSolution] Maze
+7. sortContinues with 2nd priority as in diagonals to current
+8. unambiguous in Cursor
+9. continue as list, initial as unambiguous Cursors (rotations = 1 then next unambiguous if unambiguous)
+
+--
+
 9f9a4fe
 runhaskell solve.hs 2>&1 < samples/2  15.52s user 2.79s system 59% cpu 30.526 total
 
