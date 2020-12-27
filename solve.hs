@@ -296,7 +296,7 @@ solve pixValidP rotP maze =
   take 1 . rights . solve' $ [(0, maze, (initialCursor `map` (initialSet maze)), Set.empty)]
   where
     initialCursor :: Cursor -> Continue
-    initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True, False)
+    initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True, True)
       where elem = mxGetElem x y maze
 
     solve' :: [PartialSolution] -> [Either PartialSolution Maze]
