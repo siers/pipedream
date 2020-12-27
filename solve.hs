@@ -4,7 +4,7 @@ module Main where
 
 import Control.Monad (join, mplus)
 import Data.Bifunctor
-import Data.Either (rights)
+import Data.Either (lefts, rights)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition)
@@ -268,24 +268,34 @@ solve pixValidP rotP maze =
   take 1
   . join
   . maybeToList
-  . fmap (\(head, initial) -> rights $ solve_ 0 0 head initial Set.empty [] maze)
+  . fmap (\(head, initial) -> rights $ solve_ (-1) 0 0 head initial Set.empty [] maze)
   $ uncons (initialSet maze)
   where
-    solve_ :: Int -> Direction -> Cursor -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
-    solve_ level origin cur@(x, y) initial solveds continues maze = do
+    -- () signals fialure
+    badContinues :: [Continue] -> CursorSet -> Maze -> Bool
+    badContinues continues solveds maze =
+      any null $ do
+        (c, o) <- take 2 . drop 2 $ continues
+        solve_ 2 0 o c [] solveds continues maze
+
+    solve_ :: Int -> Int -> Direction -> Cursor -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
+    solve_ lifespan level origin cur@(x, y) initial solveds continues maze = levelGuard $ do
       this <- pure $ mxGetElem x y maze
+      if lifespan /= (-1) && badContinues continues solveds maze then [] else [()]
       rotation <- pixValidRotations pixValidP maze solveds cur this
       -- canUseMutation = length rotations == 1
       solveRotation rotation (rotP #! (this, rotation))
 
       where
+        levelGuard compute = if lifespan == level then [Left ()] else compute
+
         solveRotation :: Rotation -> Char -> [Either () Maze]
         solveRotation rotation rotated =
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
           else do
             ((continue, origin), continues'') <- maybeToList $ uncons continues'
-            solve_ (level + 1) origin continue [] solveds' continues'' (traceBoard maze')
+            solve_ lifespan (level + 1) origin continue [] solveds' continues'' (traceBoard maze')
 
           where
             nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
@@ -315,7 +325,7 @@ solve pixValidP rotP maze =
                 then trace solvedStr board
                 else board
               else
-                if 't' == 't' && level `mod` 100 == 0
+                if 't' == 't' && level `mod` 200 == 0
                 then trace traceStr board
                 else board
 
