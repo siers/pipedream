@@ -212,6 +212,11 @@ cursorDeltasSafeOrdered m c p = filter (matrixBounded m . fst) $
 cursorDeltasSafe :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
 
+-- cursor in the middle is zero 0, the closer to the edge, the bigger the value
+cursorDepth :: Matrix a -> Cursor -> Int
+cursorDepth m (x, y) = (p $ x - (ncols m `div` 2)) * (p $ y - (nrows m `div` 2))
+  where p x = x -- + if x == 0 then 1 else 0
+
 --
 
 pixValid :: PixCheck -> Bool
@@ -295,9 +300,10 @@ solve pixValidP rotP maze =
 
             (continueHead, continuesTail) = fromMaybe (([], [])) . fmap (bimap return id) $ uncons continues
             continues' = dropWhile ((`Set.member` solveds) . fst) $
-              nextFast ++ continueHead ++ next ++ continuesTail
-              -- nextFast ++ next ++ continues
-              -- nextFast ++ continues ++ next
+              nextFast ++ continueHead ++ next ++ continuesTail -- <1s
+              -- sortOn fst nextFast ++ continueHead ++ next ++ continuesTail -- 4s
+              -- nextFast ++ next ++ continues -- 8s
+              -- nextFast ++ continues ++ next -- 16s
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
