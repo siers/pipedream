@@ -107,6 +107,15 @@ i: ╸, ╹, ╺, ╻
 
 --
 
+2020-12-27-13:34:54
+1. solve sides faster than just unambiguous (nextFast) by pop(1) initial only
+2. lifecycle is decreasing, returns solve_ returns Either PartialSolution Maze
+3. with PartialSolutions, you can share unaffected regions
+4. maybe optimize board by using canoical rotation
+5. 4*4 precomputed partial solutions
+
+--
+
 9f9a4fe
 runhaskell solve.hs 2>&1 < samples/2  15.52s user 2.79s system 59% cpu 30.526 total
 

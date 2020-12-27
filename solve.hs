@@ -272,22 +272,29 @@ solve pixValidP rotP maze =
   $ uncons (initialSet maze)
   where
     -- () signals fialure
-    badContinues :: [Continue] -> CursorSet -> Maze -> Bool
-    badContinues continues solveds maze =
-      any null $ do
-        (c, o) <- take 2 . drop 2 $ continues
-        solve_ 2 0 o c [] solveds continues maze
+    -- badContinues :: [Continue] -> CursorSet -> Maze -> Bool
+    -- badContinues continues solveds maze =
+    --   any null . (\x -> trace (show ("subsolves:", x)) x) $ do
+    --     c@(h, o) <- take 20 . drop 1 $ continues
+    --     -- solve_ 100 0 o h [] solveds (continues \\ [c]) maze
+    --     (pure $ solve_ 100 0 o (t h) [] solveds (continues \\ [c]) maze) :: [[Either () Maze]]
 
     solve_ :: Int -> Int -> Direction -> Cursor -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
-    solve_ lifespan level origin cur@(x, y) initial solveds continues maze = levelGuard $ do
-      this <- pure $ mxGetElem x y maze
-      if lifespan /= (-1) && badContinues continues solveds maze then [] else [()]
-      rotation <- pixValidRotations pixValidP maze solveds cur this
-      -- canUseMutation = length rotations == 1
-      solveRotation rotation (rotP #! (this, rotation))
+    solve_ lifespan iter origin cur@(x, y) initial solveds continues maze =
+      iterGuard $ do
+        -- z <- seq (t (lifespan /= (-1), iter `mod` 5 == 0, badContinues continues solveds maze)) $
+        --   if lifespan /= (-1) && iter `mod` 5 == 0 && badContinues continues solveds maze
+        --   then []
+        --   else [()]
+        -- z <- if lifespan > 0 then trace (show ("trying", lifespan, iter, rotations)) [()] else [()]
+
+        this <- pure $ mxGetElem x y maze
+        let rotations = pixValidRotations pixValidP maze solveds cur this
+        rotation <- rotations
+        solveRotation rotation (rotP #! (this, rotation))
 
       where
-        levelGuard compute = if lifespan == level then [Left ()] else compute
+        iterGuard compute = if lifespan == iter then [t $ Left ()] else compute
 
         solveRotation :: Rotation -> Char -> [Either () Maze]
         solveRotation rotation rotated =
@@ -295,7 +302,7 @@ solve pixValidP rotP maze =
           then [Right maze']
           else do
             ((continue, origin), continues'') <- maybeToList $ uncons continues'
-            solve_ lifespan (level + 1) origin continue [] solveds' continues'' (traceBoard maze')
+            solve_ lifespan (iter + length rotations) origin continue [] solveds' continues'' (traceBoard maze')
 
           where
             nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
@@ -321,11 +328,11 @@ solve pixValidP rotP maze =
             traceBoard board =
               if 't' == 'f'
               then
-                if 't' == 'f' && level `mod` 100 == 0
+                if 't' == 'f' && iter `mod` 100 == 0
                 then trace solvedStr board
                 else board
               else
-                if 't' == 't' && level `mod` 200 == 0
+                if 't' == 'f' && iter `mod` 1500 == 0
                 then trace traceStr board
                 else board
 
@@ -391,5 +398,5 @@ main = do
   input <- parse <$> getContents
   solveds <- pure . solve pixValidPrecomp rotatePrecomp $ input
 
-  mapM_ (putStrLn . printRot . computeRotations input) $ solveds
+  -- mapM_ (putStrLn . printRot . computeRotations input) $ solveds
   mapM_ (putStrLn . render) $ solveds
