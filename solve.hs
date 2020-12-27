@@ -351,14 +351,13 @@ solve pixValidP rotP maze =
             maze' = Mx.setElem rotated (y, x) maze
 
             traceBoard board =
-              if 't' == 'f'
+              if 1 == 0
               then
-                if 't' == 'f' && iter `mod` 100 == 0
+                if 1 == 0 && iter `mod` 100 == 0
                 then trace solvedStr board
                 else board
               else
-                -- if 't' == 't'
-                if 't' == 't' && iter `mod` 1000 == 0
+                if 1 == 1 && iter `mod` 500 == 0
                 then trace traceStr board
                 else board
 
