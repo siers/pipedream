@@ -121,3 +121,5 @@ runhaskell solve.hs 2>&1 < samples/2  74.92s user 3.69s system 84% cpu 1:33.56 t
 % samples/get 1; runhaskell solve.hs 2>&1 < samples/1
 
 % mkdir -p trash; (cat trash/style.html 2>/dev/null; sed 's:\(.\):<span>\1</span>:g; s/$/<br>/' < samples/1) > trash/sample.html
+
+$ ghc -prof -fprof-auto -rtsopts solve && ./solve +RTS -p < samples/3

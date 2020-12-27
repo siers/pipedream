@@ -35,6 +35,7 @@ type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
 
+{-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
 (#!) = (HS.!)
 
@@ -42,7 +43,7 @@ matrixSize :: Matrix a -> Int
 matrixSize m = nrows m * ncols m
 
 matrixBounded :: Matrix a -> Cursor -> Bool
-matrixBounded m (x, y) = not $ (x < 1 || y < 1 || ncols m < x || nrows m < y)
+matrixBounded m (x, y) = x >= 1 && y >= 1 && ncols m >= x && nrows m >= y
 
 matrixBoundaryIndices :: Matrix a -> [(Int, Int)]
 matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cur@(y, x) ->
@@ -232,15 +233,14 @@ pixValidRotations pixValidP maze solveds cur@(x, y) this =
     chooseRotation _ = rotations
 
     checkDirection rotation d =
-      if (not $ matrixBounded maze curDelta) || curDelta `Set.member` solveds
+      if not bounded || curDelta `Set.member` solveds
+      -- if not $ matrixBounded maze curDelta && curDelta `Set.notMember` solveds
       then pixValidP #! (this, char, rotation, d)
       else True
         where
+          bounded = matrixBounded maze curDelta
           curDelta = cursorDelta cur d
-          char =
-            if matrixBounded maze curDelta
-            then uncurry mxGetElem curDelta maze
-            else ' '
+          char = if bounded then uncurry mxGetElem curDelta maze else ' '
 
 pixValidRotations' :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Pix
 pixValidRotations' pvp maze solveds cur =
