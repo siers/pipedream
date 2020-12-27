@@ -4,6 +4,7 @@ module Main where
 
 import Control.Monad (join, mplus)
 import Data.Bifunctor
+import Data.Either (rights)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition)
@@ -34,6 +35,7 @@ type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
+type Continue = (Cursor, Direction)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -261,24 +263,24 @@ solve pixValidP rotP maze =
   take 1
   . join
   . maybeToList
-  . fmap (\(head, initial) -> solve_ 0 head initial Set.empty [] maze)
+  . fmap (\(head, initial) -> rights $ solve_ 0 0 head initial Set.empty [] maze)
   $ uncons (initialSet maze)
   where
-    solve_ :: Direction -> Cursor -> [Cursor] -> CursorSet -> [(Cursor, Direction)] -> Maze -> [Maze]
-    solve_ origin cur@(x, y) initial solveds continues maze = do
+    solve_ :: Int -> Direction -> Cursor -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
+    solve_ level origin cur@(x, y) initial solveds continues maze = do
       this <- pure $ mxGetElem x y maze
       rotation <- pixValidRotations pixValidP maze solveds cur this
       -- canUseMutation = length rotations == 1
       solveRotation rotation (rotP #! (this, rotation))
 
       where
-        solveRotation :: Rotation -> Char -> [Maze]
+        solveRotation :: Rotation -> Char -> [Either () Maze]
         solveRotation rotation rotated =
           if Set.size solveds == matrixSize maze - 1
-          then [maze']
+          then [Right maze']
           else do
             ((continue, origin), continues'') <- maybeToList $ uncons continues'
-            solve_ origin continue [] solveds' continues'' (traceBoard maze')
+            solve_ (level + 1) origin continue [] solveds' continues'' (traceBoard maze')
 
           where
             nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
@@ -303,11 +305,11 @@ solve pixValidP rotP maze =
             traceBoard board =
               if 't' == 'f'
               then
-                if 't' == 'f' && Set.size solveds `mod` 50 == 0
+                if 't' == 'f' && level `mod` 100 == 0
                 then trace solvedStr board
                 else board
               else
-                if 't' == 't' && Set.size solveds `mod` 50 == 0
+                if 't' == 't' && level `mod` 100 == 0
                 then trace traceStr board
                 else board
 
