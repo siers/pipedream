@@ -61,6 +61,12 @@ mxGetElem' = uncurry mxGetElem
 mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
 mxSetElem v (x, y) m = Mx.setElem v (y, x) m
 
+unconsMay :: [a] -> (Maybe a, [a])
+unconsMay a = (fst <$> uncons a, drop 1 a)
+
+unconsList :: [a] -> ([a], [a])
+unconsList = fromMaybe (([], [])) . fmap (bimap return id) . uncons
+
 --
 
 directions = [0, 1, 2, 3]
@@ -68,13 +74,13 @@ rotations = directions -- nu tā sanāk
 
 edgePriority :: Map Char [Int]
 edgePriority = Map.fromList
-  [ ('╋', [5])
-  , ('┣', [4])
-  , ('┻', [4])
-  , ('┫', [4])
-  , ('┳', [4])
-  , ('┃', [3])
-  , ('━', [3])
+  [ ('╋', [])
+  , ('┣', [1])
+  , ('┻', [1])
+  , ('┫', [1])
+  , ('┳', [1])
+  , ('┃', [1])
+  , ('━', [1])
   , ('┛', [])
   , ('┏', [])
   , ('┓', [])
@@ -307,22 +313,26 @@ solve pixValidP rotP maze =
           then [Right maze']
           else do
             ((continue, origin), continues'') <- maybeToList $ uncons continues'
-            solve'' lifespan (iter + length rotations) origin continue [] solveds' continues'' (traceBoard maze')
+            solve'' lifespan (iter + length rotations) origin continue initT solveds' continues'' (traceBoard maze')
 
           where
             nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
             withRotations = nRotations >>= (,)
 
-            (nextFast, (next, bad)) =
-              bimap (map snd) (partition (flip elem (mapChar rotated) . snd) . map snd)
+            ((edge, nextFast), (next, bad)) =
+              bimap
+                (partition ((`elem` initH) . fst) . map snd)
+                (partition (flip elem (mapChar rotated) . snd) . map snd)
               . partition ((1 >=) . fst)
               . sortOn fst .  map withRotations
-              . ((map (, 0) initial) ++)
-              $ cursorDeltasSafe maze cur directions
+              $ fromMaybe (cursorDeltasSafe maze cur directions) ((: []) . (, 0) <$> initH)
 
-            (continueHead, continuesTail) = fromMaybe (([], [])) . fmap (bimap return id) $ uncons continues
+            (initH, initT) = unconsMay initial
+            (contHead, contTail) = unconsList continues
+
             continues' = dropWhile ((`Set.member` solveds) . fst) $
-              nextFast ++ continueHead ++ next ++ continuesTail -- <1s
+              edge ++ nextFast ++ contHead ++ next ++ contTail -- <1s
+              -- nextFast ++ contHead ++ next ++ contTail -- <1s
               -- sortOn fst nextFast ++ continueHead ++ next ++ continuesTail -- 4s
               -- nextFast ++ next ++ continues -- 8s
               -- nextFast ++ continues ++ next -- 16s
