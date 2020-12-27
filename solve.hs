@@ -287,27 +287,12 @@ solve pixValidP rotP maze =
   take 1
   . join
   . maybeToList
-  . fmap (\(head, initial) -> rights $ solve_ (-1) 0 0 head initial Set.empty [] maze)
+  . fmap (\(head, initial) -> rights $ solve'' (-1) 0 0 head initial Set.empty [] maze)
   $ uncons (initialSet maze)
   where
-    -- maze = Mx.mapPos (\_ -> fst . (canonicalRotations !)) maze'
-    -- () signals fialure
-    -- badContinues :: [Continue] -> CursorSet -> Maze -> Bool
-    -- badContinues continues solveds maze =
-    --   any null . (\x -> trace (show ("subsolves:", x)) x) $ do
-    --     c@(h, o) <- take 20 . drop 1 $ continues
-    --     -- solve_ 100 0 o h [] solveds (continues \\ [c]) maze
-    --     (pure $ solve_ 100 0 o (t h) [] solveds (continues \\ [c]) maze) :: [[Either () Maze]]
-
-    solve_ :: Int -> Int -> Direction -> Cursor -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
-    solve_ lifespan iter origin cur@(x, y) initial solveds continues maze =
+    solve'' :: Int -> Int -> Direction -> Cursor -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
+    solve'' lifespan iter origin cur@(x, y) initial solveds continues maze =
       iterGuard $ do
-        -- z <- seq (t (lifespan /= (-1), iter `mod` 5 == 0, badContinues continues solveds maze)) $
-        --   if lifespan /= (-1) && iter `mod` 5 == 0 && badContinues continues solveds maze
-        --   then []
-        --   else [()]
-        -- z <- if lifespan > 0 then trace (show ("trying", lifespan, iter, rotations)) [()] else [()]
-
         this <- pure $ mxGetElem x y maze
         let rotations = pixValidRotations pixValidP maze solveds cur this
         rotation <- rotations
@@ -322,7 +307,7 @@ solve pixValidP rotP maze =
           then [Right maze']
           else do
             ((continue, origin), continues'') <- maybeToList $ uncons continues'
-            solve_ lifespan (iter + length rotations) origin continue [] solveds' continues'' (traceBoard maze')
+            solve'' lifespan (iter + length rotations) origin continue [] solveds' continues'' (traceBoard maze')
 
           where
             nRotations = length . (pixValidRotations' pixValidP maze solveds') . fst
