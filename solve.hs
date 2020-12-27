@@ -10,7 +10,7 @@ import Data.HashMap.Strict (HashMap)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
-import Data.Maybe (fromMaybe, fromJust, maybeToList)
+import Data.Maybe (fromMaybe, isJust, fromJust, maybeToList)
 import Data.Set (Set)
 import Data.Tuple.Select
 import Data.Tuple (swap)
@@ -302,27 +302,35 @@ solve pixValidP rotP maze =
     solve' :: [PartialSolution] -> [Either PartialSolution Maze]
     solve' [] = []
     solve' psolutions =
-      let (psolutions', mazes) = partitionEithers $ psolutions >>= solve'' (-1)
+      let (psolutions', mazes) = partitionEithers $ psolutions >>= solve'' False 1000
       in map Right mazes ++ solve' psolutions'
 
-    solve'' :: Int -> PartialSolution -> [Either PartialSolution Maze]
-    solve'' _ (_, _, [], _) = []
-    solve'' lifespan progress@(iter, maze, ((_, cur@(x, y), origin, this, _, _): continues), solveds) =
+    solve'' :: Bool -> Int -> PartialSolution -> [Either PartialSolution Maze]
+    solve'' _ _ (_, _, [], _) = []
+    solve'' recursed lifespan progress@(iter, maze, conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze solveds cur this
         rotation <- rotations
+
         solveRotation rotation (rotP #! (this, rotation))
 
       where
         iterGuard compute = if lifespan == 0 then [Left progress] else compute
 
         solveRotation :: Rotation -> Char -> [Either PartialSolution Maze]
-        solveRotation rotation rotated =
+        solveRotation rotation rotated = do
+          -- if not recursed && (iter `mod` 20 /= 0 || (any null . map (solve'' True 3 . nextSolutionFor) $ conts))
+          -- then [()]
+          -- else []
+
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
-          else solve'' (lifespan - 1) (iter + 1, traceBoard maze', continues', solveds')
+          else solve'' recursed (lifespan - 1) nextSolution
 
           where
+            nextSolution = (iter + 1, traceBoard maze', continues', solveds')
+            nextSolutionFor = (iter + 1, traceBoard maze', , solveds') . (: [])
+
             nRotations :: Cursor -> Char -> Bool -> Bool -> Int
             nRotations c p direct ambig =
               if not ambig
