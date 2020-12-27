@@ -302,10 +302,14 @@ solve pixValidP rotP maze =
 
             traceBoard board =
               if 't' == 'f'
-              then if 't' == 'f' && Set.size solveds `mod` 50 == 0
+              then
+                if 't' == 'f' && Set.size solveds `mod` 50 == 0
                 then trace solvedStr board
                 else board
-              else trace traceStr board
+              else
+                if 't' == 't' && Set.size solveds `mod` 50 == 0
+                then trace traceStr board
+                else board
 
               where
                 percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
@@ -313,6 +317,7 @@ solve pixValidP rotP maze =
                 clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
                 -- traceStr = show (nextFast, continues) ++ "\n" ++ renderWithPositions positions board
                 traceStr = clear ++ renderWithPositions positions board
+                -- traceStr = renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
                 positions =
                   [ ("31", Set.singleton cur)
