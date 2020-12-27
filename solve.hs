@@ -243,7 +243,7 @@ cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)
 
 -- cursor in the middle is zero 0, the closer to the edge, the bigger the value
 cursorDepth :: Cursor -> Cursor -> Int
-cursorDepth from@(i, j) (x, y) = (p $ x - i) * (p $ y - j)
+cursorDepth from@(i, j) (x, y) = abs $ (p $ x - i) * (p $ y - j)
   where p x = x + if x == 0 then 1 else 0
 
 --
@@ -333,11 +333,9 @@ solve pixValidP rotP maze =
             (initH, initT) = unconsList initial
             (contHead, contTail) = unconsList continues
 
-            continues' =
-              ((`Set.member` solveds) . snd3)
-              `dropWhile`
-              (sortOn fst3 $ next ++ continues)
-              -- (sortOn (\(n, next, _) -> (n, cursorDepth next cur)) $ next ++ continues)
+            continues' = ((`Set.member` solveds) . snd3) `dropWhile` (sortContinues $ next ++ continues)
+            -- sortContinues = sortOn fst3
+            sortContinues = sortOn (\(n, next, _) -> (n, (cursorDepth next cur)))
 
             solveds' = cur `Set.insert` solveds
             maze' = Mx.setElem rotated (y, x) maze
@@ -362,11 +360,12 @@ solve pixValidP rotP maze =
                 traceStr = clear ++ renderWithPositions positions board
                 -- traceStr = renderWithPositions positions board
                 -- traceStr = clear ++ render board -- cheap
+                (contFast, contSlow) = bimap (map snd3) (map snd3) $ partition ((< 2) . fst3) $ continues'
                 positions =
                   [ ("31", Set.singleton cur)
                   , ("34", solveds')
-                  , ("35", Set.fromList . map snd3 . filter ((< 2) . fst3) $ continues')
-                  , ("32", Set.fromList . map snd3 . filter ((>= 2) . fst3) $ continues')
+                  , ("35", Set.fromList $ contFast)
+                  , ("32", Set.fromList $ contSlow)
                   ]
 
 --
