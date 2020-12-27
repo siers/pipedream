@@ -290,18 +290,23 @@ initialSet maze =
     onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
       where elem = uncurry mxGetElem cur maze
 
+
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
   take 1
   . join
   . maybeToList
-  . fmap (\(head, initial) -> rights $ solve'' (-1) 0 0 head initial Set.empty [] maze)
+  . fmap (\(edge, initial) ->
+    rights $ solve'' (-1) 0 (initialCursor edge) initial Set.empty [] maze)
   $ uncons (initialSet maze)
   where
-    solve'' :: Int -> Int -> Direction -> Cursor -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
-    solve'' lifespan iter origin cur@(x, y) initial solveds continues maze =
+    initialCursor :: Cursor -> Continue
+    initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True)
+      where elem = mxGetElem x y maze
+
+    solve'' :: Int -> Int -> Continue -> [Cursor] -> CursorSet -> [Continue] -> Maze -> [Either () Maze]
+    solve'' lifespan iter (_, cur@(x, y), origin, this, _) initial solveds continues maze =
       iterGuard $ do
-        this <- pure $ mxGetElem x y maze
         let rotations = pixValidRotations pixValidP maze solveds cur this
         rotation <- rotations
         solveRotation rotation (rotP #! (this, rotation))
@@ -314,8 +319,8 @@ solve pixValidP rotP maze =
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
           else do
-            ((_, continue, origin, _, this'), continues'') <- maybeToList $ uncons continues'
-            solve'' lifespan (iter + length rotations) origin continue initT solveds' continues'' (traceBoard maze')
+            (continue, continues'') <- maybeToList $ uncons continues'
+            solve'' lifespan (iter + length rotations) continue initT solveds' continues'' (traceBoard maze')
 
           where
             nRotations :: Cursor -> Char -> Bool -> Int
@@ -324,8 +329,8 @@ solve pixValidP rotP maze =
               then 0
               else length $ pixValidRotations' pixValidP maze solveds' c
 
-            cursorToContinue :: Pix -> (Cursor, Direction) -> Continue
-            cursorToContinue pix (c, o) =
+            cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
+            cursorToContinue pix maze (c@(x, y), o) =
               ( nRotations c char direct
               , c
               , o
@@ -338,7 +343,7 @@ solve pixValidP rotP maze =
 
             next =
               filter (\(choices, c, o, p, d) -> choices < 2 || d)
-              . map (cursorToContinue (mapChar rotated))
+              . map (cursorToContinue (mapChar rotated) maze')
               $ (cursorDeltasSafe maze cur directions) ++ ((, 0) <$> initH)
 
             (initH, initT) = unconsList initial
