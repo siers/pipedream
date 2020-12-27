@@ -4,7 +4,7 @@ module Main where
 
 import Control.Monad (join, mplus)
 import Data.Bifunctor
-import Data.Either (lefts, rights)
+import Data.Either (lefts, rights, partitionEithers)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition)
@@ -38,6 +38,7 @@ type RotatePrecomp = HashMap (Char, Rotation) Char
 type CursorSet = Set Cursor
 -- (# valid rotations, cursor, origin, value, directly pointed, ambiguous)
 type Continue = (Int, Cursor, Direction, Char, Bool, Bool)
+type PartialSolution = (Int, Maze, [Continue], CursorSet)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -292,30 +293,34 @@ initialSet maze =
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
-  take 1
-  . rights
-  $ solve'' (-1) 0 (initialCursor `map` (initialSet maze)) Set.empty maze
+  take 1 . rights . solve' $ [(0, maze, (initialCursor `map` (initialSet maze)), Set.empty)]
   where
     initialCursor :: Cursor -> Continue
     initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True, False)
       where elem = mxGetElem x y maze
 
-    solve'' :: Int -> Int -> [Continue] -> CursorSet -> Maze -> [Either () Maze]
-    solve'' _ _ [] _ _ = []
-    solve'' lifespan iter ((_, cur@(x, y), origin, this, _, _): continues) solveds maze =
+    solve' :: [PartialSolution] -> [Either PartialSolution Maze]
+    solve' [] = []
+    solve' psolutions =
+      let (psolutions', mazes) = partitionEithers $ psolutions >>= solve'' (-1)
+      in map Right mazes ++ solve' psolutions'
+
+    solve'' :: Int -> PartialSolution -> [Either PartialSolution Maze]
+    solve'' _ (_, _, [], _) = []
+    solve'' lifespan progress@(iter, maze, ((_, cur@(x, y), origin, this, _, _): continues), solveds) =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze solveds cur this
         rotation <- rotations
         solveRotation rotation (rotP #! (this, rotation))
 
       where
-        iterGuard compute = if lifespan == iter then [t $ Left ()] else compute
+        iterGuard compute = if lifespan == 0 then [Left progress] else compute
 
-        solveRotation :: Rotation -> Char -> [Either () Maze]
+        solveRotation :: Rotation -> Char -> [Either PartialSolution Maze]
         solveRotation rotation rotated =
           if Set.size solveds == matrixSize maze - 1
           then [Right maze']
-          else solve'' lifespan (iter + length rotations) continues' solveds' (traceBoard maze')
+          else solve'' (lifespan - 1) (iter + 1, traceBoard maze', continues', solveds')
 
           where
             nRotations :: Cursor -> Char -> Bool -> Bool -> Int
