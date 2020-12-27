@@ -85,6 +85,25 @@ edgePriority = Map.fromList
   , ('╹', [])
   ]
 
+canonicalRotations :: Map Char (Char, Int)
+canonicalRotations = Map.fromList
+  [ ('╋', ('╋', 0)) -- x
+  , ('┣', ('┣', 0))
+  , ('┻', ('┣', 1)) -- t
+  , ('┫', ('┣', 2))
+  , ('┳', ('┣', 3))
+  , ('┃', ('┃', 0))
+  , ('━', ('┃', 2)) -- I
+  , ('┗', ('┗', 0)) -- l
+  , ('┛', ('┗', 1))
+  , ('┓', ('┗', 2))
+  , ('┏', ('┗', 3))
+  , ('╹', ('╹', 0)) -- i
+  , ('╸', ('╹', 1))
+  , ('╻', ('╹', 2))
+  , ('╺', ('╹', 0))
+  ]
+
 charMapEntries =
   [ ('╹', [0])
   , ('┗', [0,1])
@@ -271,6 +290,7 @@ solve pixValidP rotP maze =
   . fmap (\(head, initial) -> rights $ solve_ (-1) 0 0 head initial Set.empty [] maze)
   $ uncons (initialSet maze)
   where
+    -- maze = Mx.mapPos (\_ -> fst . (canonicalRotations !)) maze'
     -- () signals fialure
     -- badContinues :: [Continue] -> CursorSet -> Maze -> Bool
     -- badContinues continues solveds maze =
