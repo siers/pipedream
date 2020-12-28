@@ -262,10 +262,15 @@ cursorDepth from@(i, j) (x, y) = abs $ (p $ x - i) * (p $ y - j)
   where p x = x + if x == 0 then 1 else 0
 
 cursorShrink :: Int -> Cursor -> Cursor
-cursorShrink scale (x, y) = (x `div` scale, y `div` scale)
+cursorShrink scale (x, y) = (max 0 $ x `div` scale, max 0 $ y `div` scale)
 
-cursorQuadrant :: Int -> Cursor -> Constraint
-cursorQuadrant shrink c = (shrink, cursorShrink shrink c)
+quadrantShrink :: Int -> Constraint -> Constraint
+quadrantShrink scale (s, cur) = (s * scale, cursorShrink scale cur)
+
+constraintMet :: [Constraint] -> Cursor -> Bool
+constraintMet constr (x, y) = all (\(scale, quad) -> quad == cursorShrink scale (x, y)) constr
+  -- Mx.matrix 10 10 (constraintMet [(2, (3,2))] . swap)
+  -- Mx.matrix 10 10 (constraintMet [(4, (0,0))] . swap)
 
 --
 
@@ -303,8 +308,7 @@ pixValidRotations' :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Pix
 pixValidRotations' pvp maze solveds cur =
   pixValidRotations pvp maze solveds cur (mxGetElem' cur maze)
 
-constraintMet :: [Constraint] -> Cursor -> Bool
-constraintMet constr c = all ((\(scale, quad) -> quad == cursorShrink scale c)) constr
+--
 
 joinSolutions :: PartialSolution -> PartialSolution -> PartialSolution
 joinSolutions a b =
@@ -316,6 +320,8 @@ joinSolutions a b =
     (continues a ++ continues b)
     (solveds a `Set.intersection` solveds b)
     (constraints a ++ constraints b)
+
+--
 
 initialSet :: Maze -> [Cursor]
 initialSet maze =
