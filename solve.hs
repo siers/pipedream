@@ -330,12 +330,12 @@ solve pixValidP rotP maze =
         psolves :: Int -> PartialSolution -> [Either Maze PartialSolution]
         psolves index ps = ($ ps) $
           if index < 100
-          then solve'' False 2000 (Just . (4, ) . cursorShrink 4 . quadrant $ ps)
+          then solve'' 2000 (Just . (4, ) . cursorShrink 4 . quadrant $ ps)
           else pure . Right
 
-    solve'' :: Bool -> Int -> Constraints -> PartialSolution -> [Either Maze PartialSolution]
-    solve'' _ _ constraints PartialSolution{continues=[]} = []
-    solve'' recursed lifespan constraints progress@PartialSolution{iter=iter, maze=maze', continues=((_, cur@(x, y), origin, this, _): continues), solveds=solveds', quadrant=quadrant} =
+    solve'' :: Int -> Constraints -> PartialSolution -> [Either Maze PartialSolution]
+    solve'' _ constraints PartialSolution{continues=[]} = []
+    solve'' lifespan constraints progress@PartialSolution{iter=iter, maze=maze', continues=((_, cur@(x, y), origin, this, _): continues), solveds=solveds', quadrant=quadrant} =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze' solveds' cur this
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
@@ -353,7 +353,7 @@ solve pixValidP rotP maze =
         solveRotation rotated rotation =
           if Set.size solveds == matrixSize maze
           then [Left maze]
-          else solve'' recursed (lifespan - 1) constraints nextSolution
+          else solve'' (lifespan - 1) constraints nextSolution
 
           where
             nextSolution :: PartialSolution
