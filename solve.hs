@@ -41,6 +41,8 @@ type CursorSet = Set Cursor
 type Continue = (Int, Cursor, Direction, Char, Bool, Bool)
 -- iter count, maze, continues, solveds
 type PartialSolution = (Int, Maze, [Continue], CursorSet)
+-- scale, cursor (essentially a quadrant if you shrink cursor by scale
+type Constraints = Maybe (Int, Cursor)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -311,12 +313,12 @@ solve pixValidP rotP maze =
         psolves :: Int -> PartialSolution -> [Either Maze PartialSolution]
         psolves index =
           if index < 100
-          then solve'' False 2000
+          then solve'' False 2000 Nothing
           else pure . Right
 
-    solve'' :: Bool -> Int -> PartialSolution -> [Either Maze PartialSolution]
-    solve'' _ _ (_, _, [], _) = []
-    solve'' recursed lifespan progress@(iter, maze', conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
+    solve'' :: Bool -> Int -> Constraints -> PartialSolution -> [Either Maze PartialSolution]
+    solve'' _ _ constraints (_, _, [], _) = []
+    solve'' recursed lifespan constraints progress@(iter, maze', conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze' solveds cur this
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
@@ -326,17 +328,12 @@ solve pixValidP rotP maze =
 
         solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
         solveRotation rotated rotation = do
-          -- if not recursed && (iter `mod` 20 /= 0 || (any null . map (solve'' True 3 . nextSolutionFor) $ conts))
-          -- then [()]
-          -- else []
-
           if Set.size solveds == matrixSize maze - 1
           then [Left maze]
-          else solve'' recursed (lifespan - 1) nextSolution
+          else solve'' recursed (lifespan - 1) constraints nextSolution
 
           where
             nextSolution = (iter + 1, traceBoard maze, continues', solveds')
-            nextSolutionFor = (iter + 1, traceBoard maze, , solveds') . (: [])
 
             nRotations :: Maze -> Cursor -> Char -> Bool -> Bool -> Int
             nRotations maze c p direct ambig =
@@ -375,11 +372,11 @@ solve pixValidP rotP maze =
             traceBoard board =
               if 1 == 0
               then
-                if 1 == 0 && iter `mod` 100 == 0
+                if 1 == 1 && iter `mod` 200 == 0
                 then trace solvedStr board
                 else board
               else
-                if 1 == 0 && iter `mod` 100 == 0
+                if 1 == 1 && iter `mod` 200 == 0
                 then trace traceStr board
                 else board
 
