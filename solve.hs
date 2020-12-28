@@ -58,21 +58,21 @@ matrixSize :: Matrix a -> Int
 matrixSize m = nrows m * ncols m
 
 matrixBounded :: Matrix a -> Cursor -> Bool
-matrixBounded m (x, y) = x >= 1 && y >= 1 && ncols m >= x && nrows m >= y
+matrixBounded m (x, y) = x >= 0 && y >= 0 && ncols m > x && nrows m > y
 
 matrixBoundaryIndices :: Matrix a -> [(Int, Int)]
 matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cur@(y, x) ->
   if x == 1 || y == 1 || x == ncols m || y == ncols m
-  then [swap cur]
+  then [(x - 1, y - 1)]
   else []
 
 mxGetElem :: Int -> Int -> Matrix a -> a
-mxGetElem x y m = Mx.getElem y x m
+mxGetElem x y m = Mx.getElem (y + 1) (x + 1) m
 
 mxGetElem' = uncurry mxGetElem
 
 mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
-mxSetElem v (x, y) m = Mx.setElem v (y, x) m
+mxSetElem v (x, y) m = Mx.setElem v (y + 1, x + 1) m
 
 unconsMay :: [a] -> (Maybe a, [a])
 unconsMay a = (listToMaybe a, drop 1 a)
@@ -177,10 +177,10 @@ renderWithPositions targets maze =
   unlines
   . map concat
   . Mx.toLists
-  . Mx.mapPos (\cur c -> fmt cur (c : []))
+  . Mx.mapPos (\(y, x) c -> fmt (x - 1, y - 1) (c : []))
   $ maze
   where
-    color cur = fst <$> find (Set.member (swap cur) . snd) targets
+    color cur = fst <$> find (Set.member cur . snd) targets
     fmt cur s = printf $ fromMaybe s . fmap (\c -> printf "\x1b[%sm%s\x1b[39m" c s) $ color cur
 
 -- C: n=1, CW: n=-1
@@ -240,12 +240,12 @@ deltaOrder maze cur pix = order magnet \\ flipPix pix
     order 2 = [0, 1, 3, 2]
     order 3 = [1, 2, 0, 3]
 
-dbgm :: String
-dbgm = render $ Mx.matrix (nrows maze) (ncols maze) $ \cur ->
-  mapPix $ deltaOrder maze cur (flipPix [flipDir . cursorMagnet maze . swap $ cur])
-  -- (cursorMagnet maze . swap $ cur)
-  where
-    maze = Mx.matrix 20 15 (const 0 :: a -> Int)
+-- dbgm :: String
+-- dbgm = render $ Mx.matrix (nrows maze) (ncols maze) $ \cur ->
+--   mapPix $ deltaOrder maze cur (flipPix [flipDir . cursorMagnet maze . swap $ cur])
+--   -- (cursorMagnet maze . swap $ cur)
+--   where
+--     maze = Mx.matrix 20 15 (const 0 :: a -> Int)
 
 -- choose next directions at cursor for piece pointing at p directions
 cursorDeltasSafeOrdered :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
@@ -262,7 +262,7 @@ cursorDepth from@(i, j) (x, y) = abs $ (p $ x - i) * (p $ y - j)
   where p x = x + if x == 0 then 1 else 0
 
 cursorShrink :: Int -> Cursor -> Cursor
-cursorShrink scale (x, y) = ((x - 1) `div` scale, (y - 1) `div` scale)
+cursorShrink scale (x, y) = (x `div` scale, y `div` scale)
 
 cursorQuadrant :: Int -> Cursor -> Constraint
 cursorQuadrant shrink c = (shrink, cursorShrink shrink c)
@@ -412,7 +412,7 @@ solve pixValidP rotP maze =
             -- sortContinues = sortOn (\c -> (sel1 c, cursorMagnet maze (sel2 c) == sel3 c))
 
             solveds = cur `Set.insert` solveds'
-            maze = Mx.setElem rotated (y, x) maze'
+            maze = mxSetElem rotated cur maze'
 
             traceBoard board =
               if 1 == 0
