@@ -40,8 +40,6 @@ type CursorSet = Set Cursor
 type Continue = (Int, Cursor, Direction, Char, Bool, Bool)
 -- iter count, maze, continues, solveds
 type PartialSolution = (Int, Maze, [Continue], CursorSet)
--- score, ps
-type PSolutionScored = (Int, PartialSolution)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -296,30 +294,21 @@ initialSet maze =
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
-  take 1 . lefts . solve' $ [(0, (0, maze, (initialCursor `map` (initialSet maze)), Set.empty))]
+  take 1 . lefts . solve' $ [(0, maze, (initialCursor `map` (initialSet maze)), Set.empty)]
   where
     initialCursor :: Cursor -> Continue
     initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True, True)
       where elem = mxGetElem x y maze
 
-    solve' :: [PSolutionScored] -> [Either Maze PartialSolution]
+    solve' :: [PartialSolution] -> [Either Maze PartialSolution]
     solve' [] = []
-    solve' psolutions =
-      let
-        psolves :: [(Int, PSolutionScored)] -> [Either Maze PSolutionScored]
-        psolves ps = do
-          (index, (score, p)) <- ps
-          if index < 4
-          then
-            let next = solve'' False 2 p
-            in fmap (\p' -> (score - sel1 p, p')) <$> next
-          else pure (Right (score, p))
-
-        (mazes, psolutions') =
-          bimap (map Left) (sortOn sel1) . partitionEithers . psolves . zip [0..] $ psolutions
-      in
-        -- trace (show ("solve'", map fst psolutions)) $
-          mazes ++ solve' psolutions'
+    solve' psolutions = uncurry (++) . bimap (map Left) solve' . partitionEithers . (>>= uncurry psolves) . zip [0..] $ psolutions
+      where
+        psolves :: Int -> PartialSolution -> [Either Maze PartialSolution]
+        psolves index =
+          if index < 100
+          then solve'' False 1000
+          else pure . Right
 
     solve'' :: Bool -> Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ _ (_, _, [], _) = []
