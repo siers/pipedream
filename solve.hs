@@ -268,9 +268,16 @@ quadrantShrink :: Int -> Constraint -> Constraint
 quadrantShrink scale (s, cur) = (s * scale, cursorShrink scale cur)
 
 constraintMet :: [Constraint] -> Cursor -> Bool
-constraintMet constr (x, y) = all (\(scale, quad) -> quad == cursorShrink scale (x, y)) constr
-  -- Mx.matrix 10 10 (constraintMet [(2, (3,2))] . swap)
-  -- Mx.matrix 10 10 (constraintMet [(4, (0,0))] . swap)
+constraintMet constr (x, y) = flip all constr $ \(scale, quad) -> quad == cursorShrink scale (x, y)
+  -- Mx.matrix 20 20 (constraintMet [(2, (3,2))] . (\(y, x) -> (x - 1, y - 1)))
+  -- Mx.matrix 20 20 (constraintMet [(4, (0,0))] . (\(y, x) -> (x - 1, y - 1)))
+
+constraintBorderMet :: [Constraint] -> Cursor -> Bool
+constraintBorderMet constr (x, y) = flip all constr $ \(scale, quad) ->
+  (quad == cursorShrink scale (x, y))
+  &&
+  (not $ ((x + 1) `mod` scale < 2) || ((y + 1) `mod` scale < 2))
+  -- Mx.matrix 20 20 (constraintBorderMet [(8, (0,1))] . (\(y, x) -> (x - 1, y - 1)))
 
 --
 
@@ -373,7 +380,7 @@ solve pixValidP rotP maze =
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
 
       where
-        constraintViolated = not . constraintMet constraints
+        constraintViolated = not . constraintBorderMet constraints
 
         iterGuard compute =
           if lifespan == 0 || constraintViolated cur
