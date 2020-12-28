@@ -48,7 +48,7 @@ data PartialSolution = PartialSolution
   , maze :: Maze
   , continues :: [Continue]
   , solveds :: CursorSet
-  , constraints :: Constraint }
+  , constraints :: [Constraint] }
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -319,7 +319,7 @@ solve pixValidP rotP maze =
 
     quadrantSolutions =
       map (\cursors@(head:_) ->
-        PartialSolution 0 maze (initialContinue `map` cursors) Set.empty (cursorQuadrant initialShrink head))
+        PartialSolution 0 maze (initialContinue `map` cursors) Set.empty [cursorQuadrant initialShrink head])
       . groupSortOn (cursorShrink initialShrink >>= (,))
       $ initialSet maze
 
@@ -348,7 +348,7 @@ solve pixValidP rotP maze =
           else compute
 
         constraintViolated :: Cursor -> Bool
-        constraintViolated c = True == ((\(scale, quad) -> quad /= cursorShrink scale c) constraints)
+        constraintViolated c = any ((\(scale, quad) -> quad /= cursorShrink scale c)) constraints
 
         solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
         solveRotation rotated rotation =
