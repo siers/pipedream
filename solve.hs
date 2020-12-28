@@ -318,28 +318,28 @@ solve pixValidP rotP maze =
 
     solve'' :: Bool -> Int -> Constraints -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ _ constraints (_, _, [], _) = []
-    solve'' recursed lifespan constraints progress@(iter, maze', conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
+    solve'' recursed lifespan constraints progress@(iter, maze', conts@((_, cur@(x, y), origin, this, _, _): continues), solveds') =
       iterGuard $ do
-        let rotations = pixValidRotations pixValidP maze' solveds cur this
+        let rotations = pixValidRotations pixValidP maze' solveds' cur this
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
 
       where
         iterGuard compute = if lifespan == 0 then [Right progress] else compute
 
         solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
-        solveRotation rotated rotation = do
-          if Set.size solveds == matrixSize maze - 1
+        solveRotation rotated rotation =
+          if Set.size solveds == matrixSize maze
           then [Left maze]
           else solve'' recursed (lifespan - 1) constraints nextSolution
 
           where
-            nextSolution = (iter + 1, traceBoard maze, continues', solveds')
+            nextSolution = (iter + 1, traceBoard maze, continues', solveds)
 
             nRotations :: Maze -> Cursor -> Char -> Bool -> Bool -> Int
             nRotations maze c p direct ambig =
               if not ambig
               then 0
-              else length $ pixValidRotations' pixValidP maze solveds' c
+              else length $ pixValidRotations' pixValidP maze solveds c
 
             cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
             cursorToContinue pix maze (c@(x, y), o) =
@@ -366,7 +366,7 @@ solve pixValidP rotP maze =
             -- sortContinues = sortOn (\c -> (sel1 c, cursorDepth (sel2 c) cur))
             -- sortContinues = sortOn (\c -> (sel1 c, cursorMagnet maze (sel2 c) == sel3 c))
 
-            solveds' = cur `Set.insert` solveds
+            solveds = cur `Set.insert` solveds'
             maze = Mx.setElem rotated (y, x) maze'
 
             traceBoard board =
