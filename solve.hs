@@ -367,13 +367,7 @@ solve pixValidP rotP maze =
               else length $ pixValidRotations' pixValidP maze solveds c
 
             cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
-            cursorToContinue pix maze (c@(x, y), o) =
-              ( nRotations maze c char direct True
-              , c
-              , o
-              , char
-              , direct
-              )
+            cursorToContinue pix maze (c@(x, y), o) = (nRotations maze c char direct True, c, o, char, direct)
               where
                 char = mxGetElem x y maze
                 direct = o `elem` pix
