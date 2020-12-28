@@ -3,6 +3,7 @@
 module Main where
 
 import Control.Monad (join, mplus)
+import Control.Parallel.Strategies (parMap, rpar)
 import Data.Bifunctor
 import Data.Either (lefts, rights, partitionEithers)
 import Data.Hashable (Hashable)
@@ -302,12 +303,15 @@ solve pixValidP rotP maze =
 
     solve' :: [PartialSolution] -> [Either Maze PartialSolution]
     solve' [] = []
-    solve' psolutions = uncurry (++) . bimap (map Left) solve' . partitionEithers . (>>= uncurry psolves) . zip [0..] $ psolutions
+    solve' psolutions =
+      uncurry (++) . bimap (map Left) solve' . partitionEithers
+      . (>>= uncurry psolves) . zip [0..]
+      $ psolutions
       where
         psolves :: Int -> PartialSolution -> [Either Maze PartialSolution]
         psolves index =
           if index < 100
-          then solve'' False 1000
+          then solve'' False 2000
           else pure . Right
 
     solve'' :: Bool -> Int -> PartialSolution -> [Either Maze PartialSolution]
@@ -315,15 +319,13 @@ solve pixValidP rotP maze =
     solve'' recursed lifespan progress@(iter, maze', conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze' solveds cur this
-        rotation <- rotations
-
-        solveRotation rotation (rotP #! (this, rotation))
+        join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
 
       where
         iterGuard compute = if lifespan == 0 then [Right progress] else compute
 
-        solveRotation :: Rotation -> Char -> [Either Maze PartialSolution]
-        solveRotation rotation rotated = do
+        solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
+        solveRotation rotated rotation = do
           -- if not recursed && (iter `mod` 20 /= 0 || (any null . map (solve'' True 3 . nextSolutionFor) $ conts))
           -- then [()]
           -- else []
@@ -377,7 +379,7 @@ solve pixValidP rotP maze =
                 then trace solvedStr board
                 else board
               else
-                if 1 == 1 && iter `mod` 100 == 0
+                if 1 == 0 && iter `mod` 100 == 0
                 then trace traceStr board
                 else board
 
@@ -446,3 +448,4 @@ main = do
 
   -- mapM_ (putStrLn . printRot . computeRotations input) $ solveds
   mapM_ (putStrLn . render) $ solveds
+  -- mapM_ (const (pure ()) . render) $ solveds
