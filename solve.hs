@@ -301,9 +301,13 @@ solve pixValidP rotP maze =
 
     solve' :: [PartialSolution] -> [Either PartialSolution Maze]
     solve' [] = []
-    solve' psolutions =
-      let (psolutions', mazes) = partitionEithers $ psolutions >>= solve'' False 1000
-      in map Right mazes ++ solve' psolutions'
+    solve' psolutions = --trace (show ("solve'", sort $ map score psolutions)) $
+      let
+        (psolutions', mazes) = partitionEithers . (>>= psolve) . zip [0..] $ psolutions
+        psolve (index, psolution) = if index < 10 then solve'' False 10 psolution else pure (Left psolution)
+        score = (0-) . length . sel3
+        psolutions'' = sortOn score psolutions'
+      in map Right mazes ++ solve' psolutions' -- add ' to use search
 
     solve'' :: Bool -> Int -> PartialSolution -> [Either PartialSolution Maze]
     solve'' _ _ (_, _, [], _) = []
