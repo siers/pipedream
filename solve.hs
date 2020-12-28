@@ -312,9 +312,9 @@ solve pixValidP rotP maze =
 
     solve'' :: Bool -> Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ _ (_, _, [], _) = []
-    solve'' recursed lifespan progress@(iter, maze, conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
+    solve'' recursed lifespan progress@(iter, maze', conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
       iterGuard $ do
-        let rotations = pixValidRotations pixValidP maze solveds cur this
+        let rotations = pixValidRotations pixValidP maze' solveds cur this
         rotation <- rotations
 
         solveRotation rotation (rotP #! (this, rotation))
@@ -329,22 +329,22 @@ solve pixValidP rotP maze =
           -- else []
 
           if Set.size solveds == matrixSize maze - 1
-          then [Left maze']
+          then [Left maze]
           else solve'' recursed (lifespan - 1) nextSolution
 
           where
-            nextSolution = (iter + 1, traceBoard maze', continues', solveds')
-            nextSolutionFor = (iter + 1, traceBoard maze', , solveds') . (: [])
+            nextSolution = (iter + 1, traceBoard maze, continues', solveds')
+            nextSolutionFor = (iter + 1, traceBoard maze, , solveds') . (: [])
 
-            nRotations :: Cursor -> Char -> Bool -> Bool -> Int
-            nRotations c p direct ambig =
+            nRotations :: Maze -> Cursor -> Char -> Bool -> Bool -> Int
+            nRotations maze c p direct ambig =
               if not ambig
               then 0
               else length $ pixValidRotations' pixValidP maze solveds' c
 
             cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
             cursorToContinue pix maze (c@(x, y), o) =
-              ( nRotations c char direct True
+              ( nRotations maze c char direct True
               , c
               , o
               , char
@@ -357,17 +357,18 @@ solve pixValidP rotP maze =
 
             next =
               filter (\(choices, c, o, p, d, amb) -> choices < 2 || d)
-              . map (cursorToContinue (mapChar rotated) maze')
+              . map (cursorToContinue (mapChar rotated) maze)
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
             continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues)
-            -- sortContinues = sortOn sel6
-            sortContinues = sortOn (\c -> (sel6 c, sel1 c))
-            -- sortContinues = sortOn (\c -> (sel6 c, sel1 c, cursorDepth (sel2 c) cur))
+            sortContinues = sortOn sel1 -- fastest
+            -- sortContinues = sortOn (\c -> (sel6 c, sel1 c))
+            -- sortContinues = sortOn (\c -> (sel1 c, cursorDepth (sel2 c) cur))
+            -- sortContinues = sortOn (\c -> (sel1 c, cursorMagnet maze (sel2 c) == sel3 c))
 
             solveds' = cur `Set.insert` solveds
-            maze' = Mx.setElem rotated (y, x) maze
+            maze = Mx.setElem rotated (y, x) maze'
 
             traceBoard board =
               if 1 == 0
@@ -376,7 +377,7 @@ solve pixValidP rotP maze =
                 then trace solvedStr board
                 else board
               else
-                if 1 == 1 && iter `mod` 200 == 0
+                if 1 == 1 && iter `mod` 100 == 0
                 then trace traceStr board
                 else board
 
@@ -391,10 +392,10 @@ solve pixValidP rotP maze =
                 contFast = map sel2 . filter ((== 1) . sel1) $ continues'
                 contSlow = map sel2 . filter ((>= 2) . sel1) $ continues'
                 positions =
-                  [ ("33", Set.singleton cur)
-                  , ("34", solveds')
-                  , ("35", Set.fromList contFast)
-                  , ("32", Set.fromList contSlow)
+                  [ ("33", Set.singleton cur) -- yellow
+                  , ("34", solveds') -- blue
+                  , ("32", Set.fromList contFast) -- green
+                  , ("35", Set.fromList contSlow) -- magenta
                   ]
 
 --
