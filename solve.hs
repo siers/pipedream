@@ -8,10 +8,12 @@ import Data.Bifunctor
 import Data.Either (lefts, rights, partitionEithers)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition)
+import Data.List.Extra (groupSortOn)
+import Data.Either.Extra (eitherToMaybe)
+import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition, groupBy)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
-import Data.Maybe (fromMaybe, isJust, fromJust, maybeToList)
+import Data.Maybe (fromMaybe, isJust, fromJust, maybeToList, listToMaybe)
 import Data.Set (Set)
 import Data.Tuple.Select
 import Data.Tuple (swap)
@@ -37,12 +39,16 @@ type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
--- (# valid rotations, cursor, origin, value, directly pointed, ambiguous)
-type Continue = (Int, Cursor, Direction, Char, Bool, Bool)
--- iter count, maze, continues, solveds
-type PartialSolution = (Int, Maze, [Continue], CursorSet)
+-- (# valid rotations, cursor, origin, value, directly pointed)
+type Continue = (Int, Cursor, Direction, Char, Bool)
 -- scale, cursor (essentially a quadrant if you shrink cursor by scale
 type Constraints = Maybe (Int, Cursor)
+data PartialSolution = PartialSolution
+  { iter :: Int
+  , maze :: Maze
+  , continues :: [Continue]
+  , solveds :: CursorSet
+  , quadrant :: Cursor }
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -69,7 +75,7 @@ mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
 mxSetElem v (x, y) m = Mx.setElem v (y, x) m
 
 unconsMay :: [a] -> (Maybe a, [a])
-unconsMay a = (fst <$> uncons a, drop 1 a)
+unconsMay a = (listToMaybe a, drop 1 a)
 
 unconsList :: [a] -> ([a], [a])
 unconsList = fromMaybe (([], [])) . fmap (bimap return id) . uncons
@@ -249,6 +255,9 @@ cursorDepth :: Cursor -> Cursor -> Int
 cursorDepth from@(i, j) (x, y) = abs $ (p $ x - i) * (p $ y - j)
   where p x = x + if x == 0 then 1 else 0
 
+cursorShrink :: Int -> Cursor -> Cursor
+cursorShrink scale (x, y) = ((x - 1) `div` scale, (y - 1) `div` scale)
+
 --
 
 pixValid :: PixCheck -> Bool
@@ -295,13 +304,21 @@ initialSet maze =
     onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
       where elem = uncurry mxGetElem cur maze
 
+initialShrink = 4
+
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
-  take 1 . lefts . solve' $ [(0, maze, (initialCursor `map` (initialSet maze)), Set.empty)]
+  take 1 . lefts . solve' $ quadrantSolutions
   where
-    initialCursor :: Cursor -> Continue
-    initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True, True)
+    initialContinue :: Cursor -> Continue
+    initialContinue edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True)
       where elem = mxGetElem x y maze
+
+    quadrantSolutions =
+      map (\cursors@(quadrant:_) ->
+        PartialSolution 0 maze (initialContinue `map` cursors) Set.empty quadrant)
+      . groupSortOn (cursorShrink initialShrink)
+      $ initialSet maze
 
     solve' :: [PartialSolution] -> [Either Maze PartialSolution]
     solve' [] = []
@@ -311,20 +328,26 @@ solve pixValidP rotP maze =
       $ psolutions
       where
         psolves :: Int -> PartialSolution -> [Either Maze PartialSolution]
-        psolves index =
+        psolves index ps = ($ ps) $
           if index < 100
-          then solve'' False 2000 Nothing
+          then solve'' False 2000 (Just . (4, ) . cursorShrink 4 . quadrant $ ps)
           else pure . Right
 
     solve'' :: Bool -> Int -> Constraints -> PartialSolution -> [Either Maze PartialSolution]
-    solve'' _ _ constraints (_, _, [], _) = []
-    solve'' recursed lifespan constraints progress@(iter, maze', conts@((_, cur@(x, y), origin, this, _, _): continues), solveds') =
+    solve'' _ _ constraints PartialSolution{continues=[]} = []
+    solve'' recursed lifespan constraints progress@PartialSolution{iter=iter, maze=maze', continues=((_, cur@(x, y), origin, this, _): continues), solveds=solveds', quadrant=quadrant} =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze' solveds' cur this
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
 
       where
-        iterGuard compute = if lifespan == 0 then [Right progress] else compute
+        iterGuard compute =
+          if lifespan == 0 || constraintViolated cur
+          then [Right progress]
+          else compute
+
+        constraintViolated :: Cursor -> Bool
+        constraintViolated c = elem True $ (\(scale, quad) -> quad /= cursorShrink scale c) <$> constraints
 
         solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
         solveRotation rotated rotation =
@@ -333,7 +356,9 @@ solve pixValidP rotP maze =
           else solve'' recursed (lifespan - 1) constraints nextSolution
 
           where
-            nextSolution = (iter + 1, traceBoard maze, continues', solveds)
+            nextSolution :: PartialSolution
+            nextSolution =
+              PartialSolution (iter + 1) (traceBoard maze) continues' solveds quadrant
 
             nRotations :: Maze -> Cursor -> Char -> Bool -> Bool -> Int
             nRotations maze c p direct ambig =
@@ -348,21 +373,22 @@ solve pixValidP rotP maze =
               , o
               , char
               , direct
-              , True
               )
               where
                 char = mxGetElem x y maze
                 direct = o `elem` pix
 
+            next :: [Continue]
             next =
-              filter (\(choices, c, o, p, d, amb) -> choices < 2 || d)
+              filter (\(choices, c, o, p, d) -> choices < 2 || d)
               . map (cursorToContinue (mapChar rotated) maze)
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
             continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues)
-            sortContinues = sortOn sel1 -- fastest
-            -- sortContinues = sortOn (\c -> (sel6 c, sel1 c))
+            -- sortContinues = sortOn sel1 -- fastest
+            sortContinues = sortOn (\c ->  (constraintViolated (sel2 c), sel1 c))
+            -- sortContinues = sortOn (\c -> (sel1 c))
             -- sortContinues = sortOn (\c -> (sel1 c, cursorDepth (sel2 c) cur))
             -- sortContinues = sortOn (\c -> (sel1 c, cursorMagnet maze (sel2 c) == sel3 c))
 
@@ -376,7 +402,7 @@ solve pixValidP rotP maze =
                 then trace solvedStr board
                 else board
               else
-                if 1 == 1 && iter `mod` 200 == 0
+                if 1 == 1 -- && iter `mod` 200 == 0
                 then trace traceStr board
                 else board
 

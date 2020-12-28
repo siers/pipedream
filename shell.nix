@@ -2,8 +2,9 @@ with (import <nixpkgs> {});
 
 let
   ghc = haskell.packages.ghc865.ghcWithPackages (packages: with packages; [
-    parallel
+    extra
     matrix
+    parallel
     tuple
     unordered-containers
   ]);
