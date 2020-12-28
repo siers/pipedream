@@ -80,6 +80,12 @@ unconsMay a = (listToMaybe a, drop 1 a)
 unconsList :: [a] -> ([a], [a])
 unconsList = fromMaybe (([], [])) . fmap (bimap return id) . uncons
 
+matrixCopy :: (Cursor -> Bool) -> Matrix a -> Matrix a -> Matrix a
+matrixCopy copy dst src = flip Mx.mapPos dst $ \cur@(x, y) a ->
+  if copy cur
+  then mxGetElem x y src
+  else a
+
 --
 
 directions = [0, 1, 2, 3]
@@ -297,6 +303,20 @@ pixValidRotations' :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Pix
 pixValidRotations' pvp maze solveds cur =
   pixValidRotations pvp maze solveds cur (mxGetElem' cur maze)
 
+constraintMet :: [Constraint] -> Cursor -> Bool
+constraintMet constr c = all ((\(scale, quad) -> quad == cursorShrink scale c)) constr
+
+joinSolutions :: PartialSolution -> PartialSolution -> PartialSolution
+joinSolutions a b =
+  if constraints a == constraints b
+  then error . show $ ("bad:", constraints a, constraints b)
+  else PartialSolution
+    (iter a + iter b)
+    (matrixCopy (constraintMet (constraints b)) (maze a) (maze b))
+    (continues a ++ continues b)
+    (solveds a `Set.intersection` solveds b)
+    (constraints a ++ constraints b)
+
 initialSet :: Maze -> [Cursor]
 initialSet maze =
   map (\(cur, _, _) -> cur)
@@ -329,8 +349,13 @@ solve pixValidP rotP maze =
       uncurry (++)
       . bimap (map Left) (solve' shrink) . partitionEithers
       . psolves
+      -- . foldr combinePsolves
+      -- . groupSortOn (constraints)
       $ psolutions
       where
+        -- combinePsolves :: [PartialSolution] -> [PartialSolution] -> [PartialSolution]
+        -- combinePsolves a b = a >>= (, b) >>=
+
         psolves :: [PartialSolution] -> [Either Maze PartialSolution]
         psolves ps = ps >>= solve'' 2000
 
@@ -342,13 +367,12 @@ solve pixValidP rotP maze =
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
 
       where
+        constraintViolated = not . constraintMet constraints
+
         iterGuard compute =
           if lifespan == 0 || constraintViolated cur
           then [Right progress]
           else compute
-
-        constraintViolated :: Cursor -> Bool
-        constraintViolated c = any ((\(scale, quad) -> quad /= cursorShrink scale c)) constraints
 
         solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
         solveRotation rotated rotation =
@@ -382,7 +406,7 @@ solve pixValidP rotP maze =
 
             continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues)
             -- sortContinues = sortOn sel1 -- fastest
-            sortContinues = sortOn (\c ->  (constraintViolated (sel2 c), sel1 c))
+            sortContinues = sortOn (\c -> (constraintViolated (sel2 c), sel1 c))
             -- sortContinues = sortOn (\c -> (sel1 c))
             -- sortContinues = sortOn (\c -> (sel1 c, cursorDepth (sel2 c) cur))
             -- sortContinues = sortOn (\c -> (sel1 c, cursorMagnet maze (sel2 c) == sel3 c))
