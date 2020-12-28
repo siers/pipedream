@@ -38,7 +38,10 @@ type RotatePrecomp = HashMap (Char, Rotation) Char
 type CursorSet = Set Cursor
 -- (# valid rotations, cursor, origin, value, directly pointed, ambiguous)
 type Continue = (Int, Cursor, Direction, Char, Bool, Bool)
+-- iter count, maze, continues, solveds
 type PartialSolution = (Int, Maze, [Continue], CursorSet)
+-- score, ps
+type PSolutionScored = (Int, PartialSolution)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -293,23 +296,32 @@ initialSet maze =
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
 solve pixValidP rotP maze =
-  take 1 . rights . solve' $ [(0, maze, (initialCursor `map` (initialSet maze)), Set.empty)]
+  take 1 . lefts . solve' $ [(0, (0, maze, (initialCursor `map` (initialSet maze)), Set.empty))]
   where
     initialCursor :: Cursor -> Continue
     initialCursor edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True, True)
       where elem = mxGetElem x y maze
 
-    solve' :: [PartialSolution] -> [Either PartialSolution Maze]
+    solve' :: [PSolutionScored] -> [Either Maze PartialSolution]
     solve' [] = []
-    solve' psolutions = --trace (show ("solve'", sort $ map score psolutions)) $
+    solve' psolutions =
       let
-        (psolutions', mazes) = partitionEithers . (>>= psolve) . zip [0..] $ psolutions
-        psolve (index, psolution) = if index < 10 then solve'' False 10 psolution else pure (Left psolution)
-        score = (0-) . length . sel3
-        psolutions'' = sortOn score psolutions'
-      in map Right mazes ++ solve' psolutions' -- add ' to use search
+        psolves :: [(Int, PSolutionScored)] -> [Either Maze PSolutionScored]
+        psolves ps = do
+          (index, (score, p)) <- ps
+          if index < 4
+          then
+            let next = solve'' False 2 p
+            in fmap (\p' -> (score - sel1 p, p')) <$> next
+          else pure (Right (score, p))
 
-    solve'' :: Bool -> Int -> PartialSolution -> [Either PartialSolution Maze]
+        (mazes, psolutions') =
+          bimap (map Left) (sortOn sel1) . partitionEithers . psolves . zip [0..] $ psolutions
+      in
+        -- trace (show ("solve'", map fst psolutions)) $
+          mazes ++ solve' psolutions'
+
+    solve'' :: Bool -> Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ _ (_, _, [], _) = []
     solve'' recursed lifespan progress@(iter, maze, conts@((_, cur@(x, y), origin, this, _, _): continues), solveds) =
       iterGuard $ do
@@ -319,16 +331,16 @@ solve pixValidP rotP maze =
         solveRotation rotation (rotP #! (this, rotation))
 
       where
-        iterGuard compute = if lifespan == 0 then [Left progress] else compute
+        iterGuard compute = if lifespan == 0 then [Right progress] else compute
 
-        solveRotation :: Rotation -> Char -> [Either PartialSolution Maze]
+        solveRotation :: Rotation -> Char -> [Either Maze PartialSolution]
         solveRotation rotation rotated = do
           -- if not recursed && (iter `mod` 20 /= 0 || (any null . map (solve'' True 3 . nextSolutionFor) $ conts))
           -- then [()]
           -- else []
 
           if Set.size solveds == matrixSize maze - 1
-          then [Right maze']
+          then [Left maze']
           else solve'' recursed (lifespan - 1) nextSolution
 
           where
