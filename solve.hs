@@ -9,7 +9,7 @@ import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Either (lefts, rights, partitionEithers)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List.Extra (groupSortOn, groupSortBy)
+import Data.List.Extra (groupSort, groupSortOn, nubOrdOn)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition, groupBy, nub)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
@@ -75,8 +75,10 @@ matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cu
   then [(x - 1, y - 1)]
   else []
 
+to0Cursor (y, x) = (x - 1, y - 1)
+
 matrixIndices :: Matrix a -> [Cursor]
-matrixIndices m = Mx.toList . Mx.matrix (nrows m) (ncols m) $ swap
+matrixIndices m = Mx.toList $ Mx.matrix (nrows m) (ncols m) to0Cursor
 
 mxGetElem :: Int -> Int -> Matrix a -> a
 mxGetElem x y m = Mx.getElem (y + 1) (x + 1) m
@@ -339,11 +341,16 @@ initialSet maze =
       where elem = uncurry mxGetElem cur maze
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
-solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' . take 1 . reverse . take 5 $ quadrantSolutions
+solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSolutions
   where
     initialContinue :: Cursor -> Continue
     initialContinue edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True)
       where elem = mxGetElem x y maze
+
+    initialPSolutions = flip map quadrants $ (\q@(s, (x, y)) ->
+      PartialSolution 0 maze [initialContinue (x * s, y * s)] Set.empty [q])
+      where
+        quadrants = nub . map (quadrantShrink 4 . (1, )) $ matrixIndices maze
 
     quadrantSolutions =
       filter (not . constrained)
