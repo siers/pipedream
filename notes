@@ -88,6 +88,8 @@ matrixCopy (constraintMet [(4, (0,1))] . (\(y, x) -> (x - 1, y - 1))) (m 0) (m 1
         (Set.fromList $ filter (constraintMet (constraints a)) (matrixIndices (maze a)))
         (Set.fromList $ filter (constraintMet (constraints b)) (matrixIndices (maze b)))
 
+        -- group = map snd . sortOn fst . groupSort . map ((map (quadrantShrink 2) . constraints) >>= (,))
+
 --
 
 I: ━, ┃
