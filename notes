@@ -75,6 +75,9 @@ ws ws://maze.server.host/game-pipes/
         --   else [()]
         -- z <- if lifespan > 0 then trace (show ("trying", lifespan, iter, rotations)) [()] else [()]
 
+m n = Mx.matrix 20 20 (const n)
+matrixCopy (constraintMet [(4, (0,1))] . (\(y, x) -> (x - 1, y - 1))) (m 0) (m 1)
+
 --
 
 I: ━, ┃
