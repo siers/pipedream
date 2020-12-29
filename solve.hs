@@ -9,7 +9,7 @@ import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Either (lefts, rights, partitionEithers)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List.Extra (groupSortOn)
+import Data.List.Extra (groupSortOn, groupSortBy)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition, groupBy, nub)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
@@ -74,6 +74,9 @@ matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cu
   if x == 1 || y == 1 || x == ncols m || y == ncols m
   then [(x - 1, y - 1)]
   else []
+
+matrixIndices :: Matrix a -> [Cursor]
+matrixIndices m = Mx.toList . Mx.matrix (nrows m) (ncols m) $ swap
 
 mxGetElem :: Int -> Int -> Matrix a -> a
 mxGetElem x y m = Mx.getElem (y + 1) (x + 1) m
@@ -311,15 +314,14 @@ sortContinues maze constraints = sortOn (\c -> (not . constraintBorderMet maze c
 
 joinSolutions :: PartialSolution -> PartialSolution -> PartialSolution
 joinSolutions a b =
-  if not . Set.null $ Set.intersection (solveds a) (solveds b)
-  then error . show $ ("bad:", solveds a, solveds b)
-  else PartialSolution
+  PartialSolution
     (iter a + iter b)
     (matrixCopy (constraintMet (constraints b)) (maze a) (maze b))
     (sortContinues (maze a) constraints' $ continues a ++ continues b)
     (solveds a `Set.union` solveds b)
     constraints'
-  where constraints' = (constraints a ++ constraints b)
+  where
+    constraints' = (constraints a ++ constraints b)
 
 widenSolution :: Int -> PartialSolution -> PartialSolution
 widenSolution scale ps = ps { constraints = nub . map (quadrantShrink scale) $ constraints ps }
@@ -337,7 +339,7 @@ initialSet maze =
       where elem = uncurry mxGetElem cur maze
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
-solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSolutions
+solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' . take 1 . reverse . take 5 $ quadrantSolutions
   where
     initialContinue :: Cursor -> Continue
     initialContinue edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True)
@@ -350,29 +352,36 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
       . groupSortOn (cursorShrink 4 >>= (,))
       $ initialSet maze
 
-    solve' :: [PartialSolution] -> Either Maze [PartialSolution]
-    solve' [] = Right []
-    solve' psolutions = do
-      solved <- sequence $ (trace (show ("for", length psolutions)) psolutions) >>= solve'' (-1)
-      combined <- map (widenSolution 2) <$> combine solved
+    solve' = solveDC
+    -- solve' = solveBT
+
+    solveDC :: [PartialSolution] -> Either Maze [PartialSolution]
+    solveDC [] = Right []
+    solveDC psolutions = do
+      solved <- sequence $ psolutions >>= solve'' (-1)
+      combined <- (map (widenSolution 2) <$>) . combine $ group solved
       solve' combined
       where
-        combine :: [PartialSolution] -> Either Maze [PartialSolution]
-        combine =
-          fmap join
-          . traverse (foldM1 combinePsolves
-            . (\x -> trace (show $ map length x) (seq (traceBoard . head <$> x)) x)
-            . groupSortOn constraints)
-          . groupSortOn (map (quadrantShrink 2) . constraints)
+        group :: [PartialSolution] -> [[PartialSolution]]
+        group = groupSortOn (map (quadrantShrink 2) . constraints)
+
+        combine :: [[PartialSolution]] -> Either Maze [PartialSolution]
+        combine = (fmap join . ) . traverse $
+          foldM1 combinePsolves
+          . (\x -> trace (show $ map length x) (seq (traceBoard . head <$> x)) x)
+          . groupSortOn constraints
 
         combinePsolves :: [PartialSolution] -> [PartialSolution] -> Either Maze [PartialSolution]
         combinePsolves as bs = sequence $ do
           a <- as
           b <- bs
           solve'' (-1) $ joinSolutions a b
-          -- solve'' (-1) $ trace "joined" . traceBoard $ joinSolutions (trace "a" $ traceBoard a) (trace "b" $ traceBoard b)
-          -- trace "done\n\n" . solve'' (-1) . traceBoard . trace "\n\njoined" $ joinSolutions a b
-          -- trace "next" . fmap (fmap traceBoard) . solve'' (-1) . traceBoard $ joinSolutions a b
+
+    solveBT :: [PartialSolution] -> Either Maze [PartialSolution]
+    solveBT [] = Right []
+    solveBT ps = do
+      ps <- sequence $ (map traceBoard ps) >>= solve'' (-1)
+      solveBT . map (widenSolution 2) $ ps
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ PartialSolution{continues=[]} = []
@@ -385,13 +394,9 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
         constraintViolated maze cur = not . constraintBorderMet maze constraints $ cur
 
         iterGuard compute =
-          if constraintViolated maze cur
-          then [Right progress { maze = maze }]
-          -- then [Right . traceBoard $ progress { maze = maze }]
-          else
-            if lifespan == 0
-            then [Right progress]
-            else compute
+          if constraintViolated maze cur || lifespan == 0
+          then [Right progress]
+          else compute
 
         solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
         solveRotation rotated rotation =
@@ -401,7 +406,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
 
           where
             nextSolution :: PartialSolution
-            nextSolution =
+            nextSolution = traceBoard $
               PartialSolution (iter progress + 1) maze continues' solveds constraints
 
             nRotations :: Maze -> Cursor -> Char -> Bool -> Bool -> Int
@@ -431,7 +436,8 @@ traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _,
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
-      | True = trace traceStr
+      -- | True = trace traceStr
+      | iter `mod` 200 == 0 = trace traceStr
       | iter `mod` 200 == 0 = trace solvedStr
       | True = id
 
