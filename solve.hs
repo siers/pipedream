@@ -352,13 +352,18 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
 
     solve' :: [PartialSolution] -> Either Maze [PartialSolution]
     solve' [] = Right []
-    solve' psolutions = (>>= solve' . map (widenSolution 2)) . (>>= combine) . sequence $ psolutions >>= solve'' (-1)
+    solve' psolutions = do
+      solved <- sequence $ (trace (show ("for", length psolutions)) psolutions) >>= solve'' (-1)
+      combined <- map (widenSolution 2) <$> combine solved
+      solve' combined
       where
         combine :: [PartialSolution] -> Either Maze [PartialSolution]
-        combine pss = fmap join $
-          -- traverse (foldM1 combinePsolves . groupSortOn constraints)
-          traverse (foldM1 combinePsolves . (\x -> trace (show $ map length x) (seq (traceBoard . head <$> x)) x) . groupSortOn constraints)
-            (groupSortOn (map (quadrantShrink 2) . constraints) pss)
+        combine =
+          fmap join
+          . traverse (foldM1 combinePsolves
+            . (\x -> trace (show $ map length x) (seq (traceBoard . head <$> x)) x)
+            . groupSortOn constraints)
+          . groupSortOn (map (quadrantShrink 2) . constraints)
 
         combinePsolves :: [PartialSolution] -> [PartialSolution] -> Either Maze [PartialSolution]
         combinePsolves as bs = sequence $ do
