@@ -5,11 +5,11 @@ module Main where
 import Control.Monad (join, mplus, foldM)
 import Control.Parallel.Strategies (parMap, rpar)
 import Data.Bifunctor
+import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Either (lefts, rights, partitionEithers)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
 import Data.List.Extra (groupSortOn)
-import Data.Either.Extra (fromLeft, mapLeft)
 import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition, groupBy, nub)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
@@ -53,12 +53,11 @@ data PartialSolution = PartialSolution
 
 instance Show PartialSolution where
   show ps@PartialSolution{iter=iter, continues=continues, constraints=constraints} =
-    "PartialSolution" ++ show (iter, constrained, length continues, constraints)
-    where
-      constrained =
-        if all (not . constraintBorderMet (maze ps) constraints . sel2) $ continues
-        then "constrained"
-        else "solving"
+    "PartialSolution" ++ show (iter, if constrained ps then "dead" else "active", length continues, constraints)
+
+constrained :: PartialSolution -> Bool
+constrained ps@PartialSolution{continues=continues, constraints=constraints} =
+  all (not . constraintBorderMet (maze ps) constraints . sel2) $ continues
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -241,38 +240,9 @@ cursorMagnet maze (x', y') =
     h = fromIntegral $ Mx.nrows maze
     scale = h / w
 
--- order continue' by going to sides first
--- more efficent implementation: recurse and put flipDir as last
-deltaOrder :: Matrix a -> Cursor -> Pix -> Pix
-deltaOrder maze cur pix = order magnet \\ flipPix pix
-  where
-    magnet = cursorMagnet maze cur
-    order :: Direction -> Pix
-    order 0 = [2, 3, 1, 0]
-    order 1 = [3, 0, 2, 1]
-    order 2 = [0, 1, 3, 2]
-    order 3 = [1, 2, 0, 3]
-
--- dbgm :: String
--- dbgm = render $ Mx.matrix (nrows maze) (ncols maze) $ \cur ->
---   mapPix $ deltaOrder maze cur (flipPix [flipDir . cursorMagnet maze . swap $ cur])
---   -- (cursorMagnet maze . swap $ cur)
---   where
---     maze = Mx.matrix 20 15 (const 0 :: a -> Int)
-
--- choose next directions at cursor for piece pointing at p directions
-cursorDeltasSafeOrdered :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
-cursorDeltasSafeOrdered m c p = filter (matrixBounded m . fst) $
-  (cursorDelta c >>= (,)) `map` deltaOrder m c p
-
 -- just to be able to switch quickly to see if it's better
 cursorDeltasSafe :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
-
--- cursor in the middle is zero 0, the closer to the edge, the bigger the value
-cursorDepth :: Cursor -> Cursor -> Int
-cursorDepth from@(i, j) (x, y) = abs $ (p $ x - i) * (p $ y - j)
-  where p x = x + if x == 0 then 1 else 0
 
 cursorShrink :: Int -> Cursor -> Cursor
 cursorShrink scale (x, y) = (max 0 $ x `div` scale, max 0 $ y `div` scale)
@@ -286,12 +256,17 @@ constraintMet constr (x, y) = flip all constr $ \(scale, quad) -> quad == cursor
   -- Mx.matrix 20 20 (constraintMet [(4, (0,0))] . (\(y, x) -> (x - 1, y - 1)))
 
 constraintBorderMet :: Matrix a -> [Constraint] -> Cursor -> Bool
-constraintBorderMet m constr (x, y) = flip all constr $ \(scale, quad) ->
-  (quad == cursorShrink scale (x, y))
-  &&
-  ((not $ ((x + 1) `mod` scale < 2) || ((y + 1) `mod` scale < 2)) || x == 0 || y == 0 || x + 1 == ncols m || y + 1 == ncols m)
-  -- let m = Mx.matrix 20 20 (const 0)
-  -- Mx.matrix 20 20 (constraintBorderMet m [(8, (0,1))] . (\(y, x) -> (x - 1, y - 1)))
+constraintBorderMet m constrs (x, y) = flip any constrs $ \constr@(scale, quad) ->
+  let
+    borderX = ((x + overflowX) `mod` scale < 2) && (not $ x == 0 || x + 1 == ncols m)
+    borderY = ((y + overflowY) `mod` scale < 2) && (not $ y == 0 || y + 1 == nrows m)
+    friendlyAt (dx, dy) = constraintBorderMet m (constrs \\ [constr]) (x + dx, y + dy)
+    overflowX = if friendlyAt (3, 0) then 0 else if friendlyAt (-3, 0) then -2 else 1
+    overflowY = if friendlyAt (0, 3) then 0 else if friendlyAt (0, -3) then -2 else 1
+  in
+    (quad == cursorShrink scale (x, y)) && (not borderX && not borderY)
+  -- m = Mx.matrix 20 20 (const 0)
+  -- Mx.matrix 20 20 (constraintBorderMet m [(4, (0,0)), (4, (2,0)), (4, (3,1)), (4, (2,1))] . (\(y, x) -> (x - 1, y - 1)))
 
 --
 
@@ -369,7 +344,8 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
       where elem = mxGetElem x y maze
 
     quadrantSolutions =
-      map (\cursors@(head:_) ->
+      filter (not . constrained)
+      . map (\cursors@(head:_) ->
         PartialSolution 0 maze (initialContinue `map` cursors) Set.empty [quadrantShrink 4 (1, head)])
       . groupSortOn (cursorShrink 4 >>= (,))
       $ initialSet maze
@@ -380,15 +356,18 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
       where
         combine :: [PartialSolution] -> Either Maze [PartialSolution]
         combine pss = fmap join $
-          traverse (foldM1 combinePsolves . groupSortOn constraints)
+          -- traverse (foldM1 combinePsolves . groupSortOn constraints)
+          traverse (foldM1 combinePsolves . (\x -> trace (show $ map length x) (seq (traceBoard . head <$> x)) x) . groupSortOn constraints)
             (groupSortOn (map (quadrantShrink 2) . constraints) pss)
 
         combinePsolves :: [PartialSolution] -> [PartialSolution] -> Either Maze [PartialSolution]
         combinePsolves as bs = sequence $ do
           a <- as
           b <- bs
-          trace "done" . solve'' (-1) . traceBoard . trace "joined" $ joinSolutions a b
-          -- fmap (fmap traceBoard) . solve'' (-1) . traceBoard $ joinSolutions a b
+          solve'' (-1) $ joinSolutions a b
+          -- solve'' (-1) $ trace "joined" . traceBoard $ joinSolutions (trace "a" $ traceBoard a) (trace "b" $ traceBoard b)
+          -- trace "done\n\n" . solve'' (-1) . traceBoard . trace "\n\njoined" $ joinSolutions a b
+          -- trace "next" . fmap (fmap traceBoard) . solve'' (-1) . traceBoard $ joinSolutions a b
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ PartialSolution{continues=[]} = []
