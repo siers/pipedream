@@ -411,8 +411,8 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
             constraintViolated = not . constraintBorderMet maze constraints
 
             nextSolution :: PartialSolution
-            nextSolution =
-              PartialSolution (iter progress + 1) (traceBoard maze) continues' solveds constraints
+            nextSolution = traceBoard $
+              PartialSolution (iter progress + 1) maze continues' solveds constraints
 
             nRotations :: Maze -> Cursor -> Char -> Bool -> Bool -> Int
             nRotations maze c p direct ambig =
@@ -443,33 +443,29 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
             solveds = cur `Set.insert` solveds'
             maze = mxSetElem rotated cur maze'
 
-            traceBoard board =
-              if 1 == 0
-              then
-                if 1 == 1 && iter progress `mod` 200 == 0
-                then trace solvedStr board
-                else board
-              else
-                if 1 == 1 && iter progress `mod` 200 == 0
-                then trace traceStr board
-                else board
+traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _, _, _): continues), solveds=solveds} =
+  tracer iter progress
+  where
+    tracer iter -- reorder clauses to disable tracing
+      | iter `mod` 200 == 0 = trace traceStr
+      | iter `mod` 200 == 0 = trace solvedStr
+      | True = id
 
-              where
-                percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
-                solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
-                clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-                traceStr = show progress ++ "\n" ++ renderWithPositions positions board
-                -- traceStr = clear ++ renderWithPositions positions board
-                -- traceStr = renderWithPositions positions board
-                -- traceStr = clear ++ render board -- cheap
-                contFast = map sel2 . filter ((== 1) . sel1) $ continues'
-                contSlow = map sel2 . filter ((>= 2) . sel1) $ continues'
-                positions =
-                  [ ("33", Set.singleton cur) -- yellow
-                  , ("34", solveds') -- blue
-                  , ("32", Set.fromList contFast) -- green
-                  , ("35", Set.fromList contSlow) -- magenta
-                  ]
+    percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
+    solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
+    clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
+    traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
+    -- traceStr = clear ++ renderWithPositions positions board
+    -- traceStr = renderWithPositions positions board
+    -- traceStr = clear ++ render board -- cheap
+    contFast = map sel2 . filter ((== 1) . sel1) $ continues
+    contSlow = map sel2 . filter ((>= 2) . sel1) $ continues
+    positions =
+      [ ("33", Set.singleton cur) -- yellow
+      , ("34", solveds) -- blue
+      , ("32", Set.fromList contFast) -- green
+      , ("35", Set.fromList contSlow) -- magenta
+      ]
 
 --
 
