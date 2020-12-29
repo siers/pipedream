@@ -2,7 +2,7 @@
 
 module Main where
 
-import Control.Monad (join, mplus)
+import Control.Monad (join, mplus, foldM)
 import Control.Parallel.Strategies (parMap, rpar)
 import Data.Bifunctor
 import Data.Either (lefts, rights, partitionEithers)
@@ -95,6 +95,9 @@ matrixCopy match dst src = flip Mx.mapPos dst $ \cur@(y, x) a ->
   if match (x - 1, y - 1)
   then mxGetElem (x - 1) (y - 1) src
   else a
+
+foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
+foldM1 f = uncurry (foldM f) . fromJust . uncons
 
 --
 
@@ -369,20 +372,21 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
 
     solve' :: [PartialSolution] -> Either Maze [PartialSolution]
     solve' [] = Right []
-    -- solve' psolutions = sequence (psolutions >>= solve'' 2000)
-    solve' psolutions = (>>= solve' . map (widenSolution 2)) . (>>= combine) . sequence $ psolutions >>= solve'' 5
+    solve' psolutions = (>>= solve' . map (widenSolution 2)) . (>>= combine) . sequence $ psolutions >>= solve'' (-1)
       where
         combine :: [PartialSolution] -> Either Maze [PartialSolution]
-        combine pss =
-          sequence $ do
-            (groupSortOn (map (quadrantShrink 2) . constraints) pss) >>=
-              (>>= solve'' 5) . foldr1 combinePsolves . groupSortOn constraints
+        combine pss = t . fmap join $
+          traverse (foldM1 combinePsolves . groupSortOn constraints)
+            (groupSortOn (map (quadrantShrink 2) . constraints) pss)
 
-        combinePsolves :: [PartialSolution] -> [PartialSolution] -> [PartialSolution]
-        combinePsolves as bs = trace (show (map constraints as, " ## ", map constraints bs)) $ as >>= (\a -> map (joinSolutions a) bs)
+        combinePsolves :: [PartialSolution] -> [PartialSolution] -> Either Maze [PartialSolution]
+        combinePsolves as bs = sequence $ do
+          a <- as
+          b <- bs
+          t $ solve'' (-1) $ joinSolutions a b
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
-    solve'' _ PartialSolution{continues=[]} = []
+    solve'' _ PartialSolution{continues=[]} = t $ []
     solve'' lifespan progress@PartialSolution{maze=maze', continues=((_, cur@(x, y), origin, this, _): continues), solveds=solveds', constraints=constraints} =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze' solveds' cur this
@@ -446,7 +450,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
                 then trace solvedStr board
                 else board
               else
-                if 1 == 0 -- && iter progress `mod` 200 == 0
+                if 1 == 1 && iter progress `mod` 200 == 0
                 then trace traceStr board
                 else board
 
