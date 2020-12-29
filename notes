@@ -81,6 +81,13 @@ matrixCopy (constraintMet [(4, (0,1))] . (\(y, x) -> (x - 1, y - 1))) (m 0) (m 1
     -- solve' psolutions = (>>= solve' . map (widenSolution 2)) . (>>= combine) . sequence $ (map traceBoard psolutions) >>= solve'' (-1)
           -- traverse (foldM1 combinePsolves . (\x -> trace (show $ map (\g -> (constraints $ head g, length g)) x) (seq (traceBoard . head <$> x)) x) . groupSortOn constraints)
 
+    badS = not . Set.null $ Set.intersection (solveds a) (solveds b)
+    badC = not . Set.null $ Set.intersection (Set.fromList $ constraints a) (Set.fromList $ constraints b)
+    badCopy = not . Set.null $
+      Set.intersection
+        (Set.fromList $ filter (constraintMet (constraints a)) (matrixIndices (maze a)))
+        (Set.fromList $ filter (constraintMet (constraints b)) (matrixIndices (maze b)))
+
 --
 
 I: ━, ┃
