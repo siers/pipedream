@@ -375,7 +375,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
         combine :: [[PartialSolution]] -> Either Maze [PartialSolution]
         combine = (fmap join . ) . traverse $
           foldM1 combinePsolves
-          . (\x -> trace (show $ map length x) (seq (traceBoard . head <$> x)) x)
+          . (\x -> trace (show (map length x)) x)
           . groupSortOn constraints
 
         combinePsolves :: [PartialSolution] -> [PartialSolution] -> Either Maze [PartialSolution]
@@ -401,9 +401,11 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
         constraintViolated maze cur = not . constraintBorderMet maze constraints $ cur
 
         iterGuard compute =
-          if constraintViolated maze cur || lifespan == 0
+          if constraintViolated maze cur
           then [Right progress]
-          else compute
+          else if lifespan == 0
+            then [Right progress]
+            else compute
 
         solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
         solveRotation rotated rotation =
