@@ -39,9 +39,9 @@ type PixValidPrecomp = HashMap PixCheck Bool
 type RotatePrecomp = HashMap (Char, Rotation) Char
 
 type CursorSet = Set Cursor
--- (# valid rotations, cursor, origin, value, directly pointed)
-type Continue = (Int, Cursor, Direction, Char, Bool)
--- scale, cursor (essentially a quadrant if you shrink cursor by scale
+-- (# valid rotations, cursor, value, directly pointed)
+type Continue = (Int, Cursor, Char, Bool)
+-- scale, cursor (essentially a quadrant if you shrink cursor by scale)
 type Constraint = (Int, Cursor)
 
 data PartialSolution = PartialSolution
@@ -231,20 +231,6 @@ cursorDelta (x, y) 3 = (x - 1, y)
 cursorDeltaSafe :: Matrix a -> Cursor -> Direction -> [Cursor]
 cursorDeltaSafe maze c d = matrixBounded maze `filter` [cursorDelta c d]
 
--- points to cursor's closest side to maze
--- any offsets should be adjusted via dbgm output in ghci
-cursorMagnet :: Matrix a -> Cursor -> Direction
-cursorMagnet maze (x', y') =
-  if x > (h - y)
-  then if x > y then 1 else 2
-  else if x > y then 0 else 3
-  where
-    x = (fromIntegral x') * scale
-    y = fromIntegral y'
-    w = fromIntegral $ Mx.ncols maze
-    h = fromIntegral $ Mx.nrows maze
-    scale = h / w
-
 -- just to be able to switch quickly to see if it's better
 cursorDeltasSafe :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
@@ -341,16 +327,12 @@ initialSet maze =
       where elem = uncurry mxGetElem cur maze
 
 solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
-solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSolutions
+solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolution]
   where
     initialContinue :: Cursor -> Continue
-    initialContinue edge@(x, y) = (0, edge, flipDir $ cursorMagnet maze edge, elem, True)
-      where elem = mxGetElem x y maze
+    initialContinue c = (0, c, uncurry mxGetElem c maze, True)
 
-    initialPSolutions = flip map quadrants $ (\q@(s, (x, y)) ->
-      PartialSolution 0 maze [initialContinue (x * s, y * s)] Set.empty [q])
-      where
-        quadrants = nub . map (quadrantShrink 4 . (1, )) $ matrixIndices maze
+    simplestPSolution = PartialSolution 0 maze [(initialContinue (1, 1))] Set.empty [(4, (1, 1))]
 
     quadrantSolutions =
       filter (not . constrained)
@@ -392,7 +374,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ PartialSolution{continues=[]} = []
-    solve'' lifespan progress@PartialSolution{maze=maze', continues=((_, cur@(x, y), origin, this, _): continues), solveds=solveds', constraints=constraints} =
+    solve'' lifespan progress@PartialSolution{maze=maze', continues=((_, cur@(x, y), this, _): continues), solveds=solveds', constraints=constraints} =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze' solveds' cur this
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
@@ -425,14 +407,14 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
               else length $ pixValidRotations' pixValidP maze solveds c
 
             cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
-            cursorToContinue pix maze (c@(x, y), o) = (nRotations maze c char direct True, c, o, char, direct)
+            cursorToContinue pix maze (c@(x, y), o) = (nRotations maze c char direct True, c, char, direct)
               where
                 char = mxGetElem x y maze
                 direct = o `elem` pix
 
             next :: [Continue]
             next =
-              filter (\(choices, c, o, p, d) -> choices < 2 || d)
+              filter (\(choices, c, p, d) -> choices < 2 || d)
               . map (cursorToContinue (mapChar rotated) maze)
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
@@ -441,7 +423,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ quadrantSoluti
             solveds = cur `Set.insert` solveds'
             maze = mxSetElem rotated cur maze'
 
-traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _, _, _): continues), solveds=solveds} =
+traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _, _): continues), solveds=solveds} =
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
