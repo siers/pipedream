@@ -272,12 +272,13 @@ constraintMet constr (x, y) = flip all constr $ \(scale, quad) -> quad == cursor
   -- Mx.matrix 20 20 (constraintMet [(2, (3,2))] . (\(y, x) -> (x - 1, y - 1)))
   -- Mx.matrix 20 20 (constraintMet [(4, (0,0))] . (\(y, x) -> (x - 1, y - 1)))
 
-constraintBorderMet :: [Constraint] -> Cursor -> Bool
-constraintBorderMet constr (x, y) = flip all constr $ \(scale, quad) ->
+constraintBorderMet :: Matrix a -> [Constraint] -> Cursor -> Bool
+constraintBorderMet m constr (x, y) = flip all constr $ \(scale, quad) ->
   (quad == cursorShrink scale (x, y))
   &&
-  (not $ ((x + 1) `mod` scale < 2) || ((y + 1) `mod` scale < 2))
-  -- Mx.matrix 20 20 (constraintBorderMet [(8, (0,1))] . (\(y, x) -> (x - 1, y - 1)))
+  ((not $ ((x + 1) `mod` scale < 2) || ((y + 1) `mod` scale < 2)) || x == 0 || y == 0 || x + 1 == ncols m || y + 1 == ncols m)
+  -- let m = Mx.matrix 20 20 (const 0)
+  -- Mx.matrix 20 20 (constraintBorderMet m [(8, (0,1))] . (\(y, x) -> (x - 1, y - 1)))
 
 --
 
@@ -380,7 +381,7 @@ solve pixValidP rotP maze =
         join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
 
       where
-        constraintViolated = not . constraintBorderMet constraints
+        constraintViolated = not . constraintBorderMet maze' constraints
 
         iterGuard compute =
           if lifespan == 0 || constraintViolated cur
