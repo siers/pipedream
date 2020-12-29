@@ -78,6 +78,9 @@ ws ws://maze.server.host/game-pipes/
 m n = Mx.matrix 20 20 (const n)
 matrixCopy (constraintMet [(4, (0,1))] . (\(y, x) -> (x - 1, y - 1))) (m 0) (m 1)
 
+    -- solve' psolutions = (>>= solve' . map (widenSolution 2)) . (>>= combine) . sequence $ (map traceBoard psolutions) >>= solve'' (-1)
+          -- traverse (foldM1 combinePsolves . (\x -> trace (show $ map (\g -> (constraints $ head g, length g)) x) (seq (traceBoard . head <$> x)) x) . groupSortOn constraints)
+
 --
 
 I: ━, ┃
