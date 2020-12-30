@@ -2,18 +2,17 @@
 
 module Main where
 
-import Control.Monad (join, mplus, foldM)
+import Control.Monad (join, foldM)
 import Control.Parallel.Strategies (parMap, rpar)
 import Data.Bifunctor
 import Data.Either.Extra (fromLeft, mapLeft)
-import Data.Either (lefts, rights, partitionEithers)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List.Extra (groupSort, groupSortOn, nubOrdOn)
-import Data.List (sort, sortOn, isSubsequenceOf, elemIndex, uncons, concat, find, (\\), partition, groupBy, nub)
+import Data.List.Extra (groupSortOn)
+import Data.List (sort, sortOn, elemIndex, uncons, concat, find, (\\), nub)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
-import Data.Maybe (fromMaybe, isJust, fromJust, maybeToList, listToMaybe)
+import Data.Maybe (fromMaybe, fromJust, listToMaybe)
 import Data.Set (Set)
 import Data.Tuple.Select
 import Data.Tuple (swap)
@@ -70,7 +69,7 @@ matrixBounded :: Matrix a -> Cursor -> Bool
 matrixBounded m (x, y) = x >= 0 && y >= 0 && ncols m > x && nrows m > y
 
 matrixBoundaryIndices :: Matrix a -> [(Int, Int)]
-matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \cur@(y, x) ->
+matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \(y, x) ->
   if x == 1 || y == 1 || x == ncols m || y == ncols m
   then [(x - 1, y - 1)]
   else []
@@ -95,7 +94,7 @@ unconsList :: [a] -> ([a], [a])
 unconsList = fromMaybe (([], [])) . fmap (bimap return id) . uncons
 
 matrixCopy :: (Cursor -> Bool) -> Matrix a -> Matrix a -> Matrix a
-matrixCopy match dst src = flip Mx.mapPos dst $ \cur@(y, x) a ->
+matrixCopy match dst src = flip Mx.mapPos dst $ \(y, x) a ->
   if match (x - 1, y - 1)
   then mxGetElem (x - 1) (y - 1) src
   else a
@@ -127,25 +126,6 @@ edgePriority = Map.fromList
   , ('╹', [])
   ]
 
-canonicalRotations :: Map Char (Char, Int)
-canonicalRotations = Map.fromList
-  [ ('╋', ('╋', 0)) -- x
-  , ('┣', ('┣', 0))
-  , ('┻', ('┣', 1)) -- t
-  , ('┫', ('┣', 2))
-  , ('┳', ('┣', 3))
-  , ('┃', ('┃', 0))
-  , ('━', ('┃', 2)) -- I
-  , ('┗', ('┗', 0)) -- l
-  , ('┛', ('┗', 1))
-  , ('┓', ('┗', 2))
-  , ('┏', ('┗', 3))
-  , ('╹', ('╹', 0)) -- i
-  , ('╸', ('╹', 1))
-  , ('╻', ('╹', 2))
-  , ('╺', ('╹', 0))
-  ]
-
 charMapEntries =
   [ ('╹', [0])
   , ('┗', [0,1])
@@ -164,12 +144,8 @@ charMapEntries =
   , ('╸', [3])
   ]
 
-charsSpecial =
-  [ ' ' -- wall
-  ]
-
 (chars, pixs) = unzip charMapEntries
-charsWithSpecial = chars ++ charsSpecial
+charsWithSpecial = chars ++ [' '] -- ' ' == wall
 
 charMap :: Map Char Pix
 charMap = Map.fromList charMapEntries
@@ -213,8 +189,7 @@ rotate r = map (rotateDir r)
 rotateChar :: Rotation -> Char -> Char
 rotateChar r = mapPix . rotate r .mapChar
 
-opposite = 2
-
+verifyPixelModel :: Bool
 verifyPixelModel = (pixs ==) . last $
   [ map (mapChar . mapPix . rotate 1) pixs
   , map (mapChar . mapPix . rotate 1 . rotate 1) pixs
@@ -227,6 +202,7 @@ cursorDelta (x, y) 0 = (x, y - 1)
 cursorDelta (x, y) 1 = (x + 1, y)
 cursorDelta (x, y) 2 = (x, y + 1)
 cursorDelta (x, y) 3 = (x - 1, y)
+cursorDelta _ _      = error "only defined for 4 directions"
 
 cursorDeltaSafe :: Matrix a -> Cursor -> Direction -> [Cursor]
 cursorDeltaSafe maze c d = matrixBounded maze `filter` [cursorDelta c d]
@@ -266,13 +242,13 @@ pixValid (this, that, rotation, direction) =
   filter (flipDir direction ==) thisRequires == filter (flipDir direction ==) thatRequires
     where
       thisRequires :: Pix
-      thisRequires = (rotation + opposite) `rotate` mapChar this
+      thisRequires = (rotation + 2) `rotate` mapChar this
 
       thatRequires :: Pix
       thatRequires = if that == ' ' then [] else mapChar that
 
 pixValidRotations :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Char -> Pix
-pixValidRotations pixValidP maze solveds cur@(x, y) this =
+pixValidRotations pixValidP maze solveds cur this =
   (\r -> all (checkDirection r) directions) `filter` chooseRotation this
   where
     chooseRotation :: Char -> Pix
@@ -374,10 +350,10 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ PartialSolution{continues=[]} = []
-    solve'' lifespan progress@PartialSolution{maze=maze', continues=((_, cur@(x, y), this, _): continues), solveds=solveds', constraints=constraints} =
+    solve'' lifespan progress@PartialSolution{maze=maze', continues=((_, cur, this, _): continues), solveds=solveds', constraints=constraints} =
       iterGuard $ do
         let rotations = pixValidRotations pixValidP maze' solveds' cur this
-        join . parMap rpar (\r -> solveRotation (rotP #! (this, r)) r) $ rotations
+        join . parMap rpar (\r -> solveRotation (rotP #! (this, r))) $ rotations
 
       where
         constraintViolated maze cur = not . constraintBorderMet maze constraints $ cur
@@ -389,8 +365,8 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
             then [Right progress]
             else compute
 
-        solveRotation :: Char -> Rotation -> [Either Maze PartialSolution]
-        solveRotation rotated rotation =
+        solveRotation :: Char -> [Either Maze PartialSolution]
+        solveRotation rotated =
           if Set.size solveds == matrixSize maze
           then [Left maze]
           else solve'' (lifespan - 1) nextSolution
@@ -400,21 +376,21 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
             nextSolution = traceBoard $
               PartialSolution (iter progress + 1) maze continues' solveds constraints
 
-            nRotations :: Maze -> Cursor -> Char -> Bool -> Bool -> Int
-            nRotations maze c p direct ambig =
+            nRotations :: Maze -> Cursor -> Bool -> Int
+            nRotations maze c ambig =
               if not ambig
               then 0
               else length $ pixValidRotations' pixValidP maze solveds c
 
             cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
-            cursorToContinue pix maze (c@(x, y), o) = (nRotations maze c char direct True, c, char, direct)
+            cursorToContinue pix maze (c@(x, y), o) = (nRotations maze c True, c, char, direct)
               where
                 char = mxGetElem x y maze
                 direct = o `elem` pix
 
             next :: [Continue]
             next =
-              filter (\(choices, c, p, d) -> choices < 2 || d)
+              filter (\(choices, _, _, d) -> choices < 2 || d)
               . map (cursorToContinue (mapChar rotated) maze)
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
@@ -423,6 +399,8 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
             solveds = cur `Set.insert` solveds'
             maze = mxSetElem rotated cur maze'
 
+traceBoard :: PartialSolution -> PartialSolution
+traceBoard progress@PartialSolution{continues=[]} = progress
 traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _, _): continues), solveds=solveds} =
   tracer iter progress
   where
@@ -435,10 +413,10 @@ traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _,
     percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
     solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
-    -- traceStr = clear ++ renderWithPositions positions board
-    -- traceStr = renderWithPositions positions board
-    -- traceStr = clear ++ render board -- cheap
+    -- traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
+    traceStr = clear ++ renderWithPositions positions maze
+    -- traceStr = renderWithPositions positions maze
+    -- traceStr = clear ++ render maze -- cheap
     contFast = map sel2 . filter ((== 1) . sel1) $ continues
     contSlow = map sel2 . filter ((>= 2) . sel1) $ continues
     positions =
@@ -485,9 +463,8 @@ pixValidPrecomputed = HS.fromList list
       d <- directions
       pure (this, that, r, d)
 
+main :: IO ()
 main = do
-  pure verifyPixelModel
-
   pixValidPrecomp <- pure pixValidPrecomputed
   rotatePrecomp <- pure rotatePrecomputed
 
