@@ -222,6 +222,9 @@ constraintMet constr (x, y) = flip all constr $ \(scale, quad) -> quad == cursor
   -- Mx.matrix 20 20 (constraintMet [(2, (3,2))] . (\(y, x) -> (x - 1, y - 1)))
   -- Mx.matrix 20 20 (constraintMet [(4, (0,0))] . (\(y, x) -> (x - 1, y - 1)))
 
+-- this computes constraints by quadrants for divide and conquer excluding borders unless joined
+-- this is way too complicated, but it works and isn't the reason the solver can't solve
+-- see matrix outputs in comments under body to figure out what it does
 constraintBorderMet :: Matrix a -> [Constraint] -> Cursor -> Bool
 constraintBorderMet m constrs (x, y) = flip any constrs $ \constr@(scale, quad) ->
   let
@@ -292,6 +295,7 @@ widenSolution scale ps = ps { constraints = nub . map (quadrantShrink scale) $ c
 
 --
 
+-- edge pieces with unambiguous rotations
 initialSet :: Maze -> [Cursor]
 initialSet maze =
   map (\(cur, _, _) -> cur)
@@ -320,6 +324,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
     solve' = solveDC
     -- solve' = solveBT
 
+    -- divide and conquer by combining quadrants + backtracking
     solveDC :: [PartialSolution] -> Either Maze [PartialSolution]
     solveDC [] = Right []
     solveDC psolutions = do
@@ -342,6 +347,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
           b <- bs
           solve'' (-1) $ joinSolutions a b
 
+    -- pure backtracking
     solveBT :: [PartialSolution] -> Either Maze [PartialSolution]
     solveBT [] = Right []
     solveBT ps = do

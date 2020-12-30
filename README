@@ -1,2 +1,32 @@
-get samples
-  (echo -e 'get samplesnew 6\nmap'; sleep 10) | ws ws://hometask.eg1236.com/game-pipes/ > samples/6
+solve.hs   this is the solver
+samples/   here are the samples
+notes      scratchpad
+
+running
+  nix-shell shell.nix --run 'ghc solve.hs && ./solve < samples/2'
+
+running with profiler
+  ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve +RTS -p < samples/3
+
+to generate rotations uncomment the according line in main
+
+┏╸╺┓┏━╸╻┏━━╸╺┳╸╻╻╻╻╺┳╸┏━┓
+┗┳┳┻┻╸╻┣╋╸╻╻╺┫┏┫┃┣┫╻┗┳┻┓╹
+┏┛┗━━┓┗┫╹╺┫┗┳┛╹┣┛╹┗╋╸┃╻┗╸
+┣━┳━╸┗┳╋━┓┣━╋╸╺╋╸╺┓┗┓┃┃┏┓
+╹┏┻┓┏┓┃┣┓┃┃╺┫╺┳┫╺┓┃┏┻┫┣┛╹
+╻┣╸╹╹┗┫┃╹┃┗╸┣━┛╹╻┣┫┃╺┻╋┓╻
+┗┻╸╻┏┓╹╹╻┗┓╺┻┳━╸╹┣╋┻┓╻╹╹┃
+╺┓┏┛┃┣┓╻┗┳┻┓┏┛╻┏━┫┗╸┗┛┏━┛
+╻┗┫╺┛╹┗┻━┫╺┫┣━┻┻┓┗╸╺┓╺╋━╸
+┃╻┣━━━┓╺━┫╻┗┛┏┳╸┣╸┏━┫┏╋┓╻
+┃┃┃╺┓╻┃┏┳┛┗┳━┛┃╺┫╺┫╻┗┛╹┗┫
+┣┻┛╺╋┻┛╹┃╺┓┣━╸╹╺╋━╋┻╸╻╻┏┫
+╹┏┳━╋┳╸┏┻┓┣┛╺┳┓┏╋╸╹┏┳╋┻┫╹
+╻┃┗╸┃┗┳┛╺╋┛╻╻╹┃┃╹╺┓╹┃┣╸┗╸
+┣╋━╸╹┏╋━╸┗━┛┣╸┣┻━┳┫╻╹┃╻┏╸
+┃┣╸╻╻╹┃╻╺━┓┏┛╺┻┳╸╹┃┣╸┃┃┣╸
+╹╹╻┗╋━┻┛╺┳┛┗━┓╻┗╸╺┻┻┓┃┃┣┓
+╻╻┣┳┻┳━╸┏┻━┳┓┣┻━━┳━┳┛┣┻┛┃
+┣┻┫┃╻┗┳╸┣┓╺┫┣╋╸╺━┛┏┛╻┃╻╺┫
+╹╺┛╹┗━┛╺┛╹╺┛╹┗━━╸╺┻╸┗┻┻╸╹
