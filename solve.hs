@@ -36,15 +36,14 @@ type Rotation = Int
 type CursorSet = Set Cursor
 -- (# valid rotations, cursor, value, directly pointed)
 type Continue = (Int, Cursor, Char, Bool)
--- scale, cursor (essentially a quadrant if you shrink cursor by scale)
-type Constraint = (Int, Cursor)
+type Constraint = Double -- constraint = only check continues within radius r of (0, 0)
 
 data PartialSolution = PartialSolution
   { iter :: Int
   , maze :: Maze
   , continues :: [Continue]
   , solveds :: CursorSet
-  , constraints :: [Constraint] }
+  , constraints :: Constraint }
 
 data HashedFun = HashedFun
   { rotate' :: Rotation -> Char -> Char
@@ -52,11 +51,7 @@ data HashedFun = HashedFun
 
 instance Show PartialSolution where
   show ps@PartialSolution{iter=iter, continues=continues, constraints=constraints} =
-    "PartialSolution" ++ show (iter, if constrained ps then "dead" else "active", length continues, constraints)
-
-constrained :: PartialSolution -> Bool
-constrained ps@PartialSolution{continues=continues, constraints=constraints} =
-  all (not . constraintBorderMet (maze ps) constraints . sel2) $ continues
+    "PartialSolution" ++ show (iter, length continues, constraints)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -214,29 +209,10 @@ cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)
 cursorShrink :: Int -> Cursor -> Cursor
 cursorShrink scale (x, y) = (max 0 $ x `div` scale, max 0 $ y `div` scale)
 
-quadrantShrink :: Int -> Constraint -> Constraint
-quadrantShrink scale (s, cur) = (s * scale, cursorShrink scale cur)
-
-constraintMet :: [Constraint] -> Cursor -> Bool
-constraintMet constr (x, y) = flip all constr $ \(scale, quad) -> quad == cursorShrink scale (x, y)
-  -- Mx.matrix 20 20 (constraintMet [(2, (3,2))] . (\(y, x) -> (x - 1, y - 1)))
-  -- Mx.matrix 20 20 (constraintMet [(4, (0,0))] . (\(y, x) -> (x - 1, y - 1)))
-
--- this computes constraints by quadrants for divide and conquer excluding borders unless joined
--- this is way too complicated, but it works and isn't the reason the solver can't solve
--- see matrix outputs in comments under body to figure out what it does
-constraintBorderMet :: Matrix a -> [Constraint] -> Cursor -> Bool
-constraintBorderMet m constrs (x, y) = flip any constrs $ \constr@(scale, quad) ->
-  let
-    borderX = ((x + overflowX) `mod` scale < 2) && (not $ x == 0 || x + 1 == ncols m)
-    borderY = ((y + overflowY) `mod` scale < 2) && (not $ y == 0 || y + 1 == nrows m)
-    friendlyAt (dx, dy) = constraintBorderMet m (constrs \\ [constr]) (x + dx, y + dy)
-    overflowX = if friendlyAt (3, 0) then 0 else if friendlyAt (-3, 0) then -2 else 1
-    overflowY = if friendlyAt (0, 3) then 0 else if friendlyAt (0, -3) then -2 else 1
-  in
-    (quad == cursorShrink scale (x, y)) && (not borderX && not borderY)
-  -- m = Mx.matrix 20 20 (const 0)
-  -- Mx.matrix 20 20 (constraintBorderMet m [(4, (0,0)), (4, (2,0)), (4, (3,1)), (4, (2,1))] . (\(y, x) -> (x - 1, y - 1)))
+withinRadius :: Double -> Cursor -> Bool
+withinRadius r cur = r * r > x * x + y * y
+  where (x, y) = bimap fromIntegral fromIntegral cur
+  -- Mx.matrix 20 20 (withinRadius 5 . to0Cursor)
 
 --
 
@@ -274,24 +250,8 @@ pixValidRotations' :: HashedFun -> Maze -> CursorSet -> Cursor -> Pix
 pixValidRotations' h maze solveds cur =
   pixValidRotations h maze solveds cur (mxGetElem' cur maze)
 
---
-
-sortContinues :: Maze -> [Constraint] -> [Continue] -> [Continue]
-sortContinues maze constraints = sortOn (\c -> (not . constraintBorderMet maze constraints $ sel2 c, sel1 c))
-
-joinSolutions :: PartialSolution -> PartialSolution -> PartialSolution
-joinSolutions a b =
-  PartialSolution
-    (iter a + iter b)
-    (matrixCopy (constraintMet (constraints b)) (maze a) (maze b))
-    (sortContinues (maze a) constraints' $ continues a ++ continues b)
-    (solveds a `Set.union` solveds b)
-    constraints'
-  where
-    constraints' = (constraints a ++ constraints b)
-
-widenSolution :: Int -> PartialSolution -> PartialSolution
-widenSolution scale ps = ps { constraints = nub . map (quadrantShrink scale) $ constraints ps }
+sortContinues :: Constraint -> [Continue] -> [Continue]
+sortContinues constraints = sortOn (\c -> (not . withinRadius constraints $ sel2 c, sel1 c))
 
 --
 
@@ -313,47 +273,18 @@ solve h@HashedFun{rotate'=rotate'} maze =
     initialContinue :: Cursor -> Continue
     initialContinue c = (0, c, uncurry mxGetElem c maze, True)
 
-    simplestPSolution = PartialSolution 0 maze [(initialContinue (1, 1))] Set.empty [(4, (1, 1))]
-
-    quadrantSolutions =
-      filter (not . constrained)
-      . map (\cursors@(head:_) ->
-        PartialSolution 0 maze (initialContinue `map` cursors) Set.empty [quadrantShrink 4 (1, head)])
-      . groupSortOn (cursorShrink 4 >>= (,))
-      $ initialSet maze
+    simplestPSolution = PartialSolution 0 maze [(initialContinue (1, 1))] Set.empty 5.0
 
     -- solve' = solveDC
-    solve' = solveBT
+    solve' = solveBT 5
 
-    -- divide and conquer by combining quadrants + backtracking
-    solveDC :: [PartialSolution] -> Either Maze [PartialSolution]
-    solveDC [] = Right []
-    solveDC psolutions = do
-      solved <- sequence $ psolutions >>= solve'' (-1)
-      combined <- (map (widenSolution 2) <$>) . combine $ group solved
-      solve' combined
-      where
-        group :: [PartialSolution] -> [[PartialSolution]]
-        group = groupSortOn (map (quadrantShrink 2) . constraints)
-
-        combine :: [[PartialSolution]] -> Either Maze [PartialSolution]
-        combine = (fmap join . ) . traverse $
-          foldM1 combinePsolves
-          . (\x -> trace (show (map length x)) x)
-          . groupSortOn constraints
-
-        combinePsolves :: [PartialSolution] -> [PartialSolution] -> Either Maze [PartialSolution]
-        combinePsolves as bs = sequence $ do
-          a <- as
-          b <- bs
-          solve'' (-1) $ joinSolutions a b
-
-    -- pure backtracking
-    solveBT :: [PartialSolution] -> Either Maze [PartialSolution]
-    solveBT [] = Right []
-    solveBT ps = do
-      ps <- sequence $ (map traceBoard ps) >>= solve'' (-1)
-      solveBT . map (widenSolution 2) $ ps
+    -- pure backtracking, restricting solutions to size circle of size r
+    solveBT :: Int -> [PartialSolution] -> Either Maze [PartialSolution]
+    solveBT _ [] = Right []
+    solveBT r ps = do
+      ps <- sequence $ ps >>= solve'' (-1)
+      solveBT r' . map (\p@PartialSolution{constraints=c} -> p { constraints = (fromIntegral r') } ) $ ps
+      where r' = r + 5
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ PartialSolution{continues=[]} = []
@@ -363,7 +294,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
         join . parMap rpar (\r -> solveRotation (rotate' r this)) $ rotations
 
       where
-        constraintViolated maze cur = not . constraintBorderMet maze constraints $ cur
+        constraintViolated maze cur = not . withinRadius constraints $ cur
 
         iterGuard compute =
           if constraintViolated maze cur
@@ -402,7 +333,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
-            continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues maze constraints $ next ++ continues)
+            continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues constraints $ next ++ continues)
             solveds = cur `Set.insert` solveds'
             maze = mxSetElem rotated cur maze'
 
@@ -412,10 +343,11 @@ traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _,
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
-      | True = id
-      | True = trace traceStr
+      -- | True = id
+      -- | True = trace traceStr
       | iter `mod` 200 == 0 = trace traceStr
       | iter `mod` 200 == 0 = trace solvedStr
+      | True = id
 
     percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
     solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
