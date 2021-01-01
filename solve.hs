@@ -33,10 +33,6 @@ type Cursor = (Int, Int)
 type CursorRot = (Int, Int, Int)
 type Rotation = Int
 
-type PixCheck = (Char, Char, Rotation, Direction)
-type PixValidPrecomp = HashMap PixCheck Bool
-type RotatePrecomp = HashMap (Char, Rotation) Char
-
 type CursorSet = Set Cursor
 -- (# valid rotations, cursor, value, directly pointed)
 type Continue = (Int, Cursor, Char, Bool)
@@ -49,6 +45,10 @@ data PartialSolution = PartialSolution
   , continues :: [Continue]
   , solveds :: CursorSet
   , constraints :: [Constraint] }
+
+data HashedFun = HashedFun
+  { rotate' :: Rotation -> Char -> Char
+  , pixValid' :: (Char, Char, Rotation, Direction) -> Bool }
 
 instance Show PartialSolution where
   show ps@PartialSolution{iter=iter, continues=continues, constraints=constraints} =
@@ -187,7 +187,7 @@ rotate :: Rotation -> Pix -> Pix
 rotate r = map (rotateDir r)
 
 rotateChar :: Rotation -> Char -> Char
-rotateChar r = mapPix . rotate r .mapChar
+rotateChar r = mapPix . rotate r . mapChar
 
 verifyPixelModel :: Bool
 verifyPixelModel = (pixs ==) . last $
@@ -240,7 +240,7 @@ constraintBorderMet m constrs (x, y) = flip any constrs $ \constr@(scale, quad) 
 
 --
 
-pixValid :: PixCheck -> Bool
+pixValid :: (Char, Char, Rotation, Direction) -> Bool
 pixValid (this, that, rotation, direction) =
   filter (flipDir direction ==) thisRequires == filter (flipDir direction ==) thatRequires
     where
@@ -250,8 +250,8 @@ pixValid (this, that, rotation, direction) =
       thatRequires :: Pix
       thatRequires = if that == ' ' then [] else mapChar that
 
-pixValidRotations :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Char -> Pix
-pixValidRotations pixValidP maze solveds cur this =
+pixValidRotations :: HashedFun -> Maze -> CursorSet -> Cursor -> Char -> Pix
+pixValidRotations HashedFun{pixValid'=pixValid'} maze solveds cur this =
   (\r -> all (checkDirection r) directions) `filter` chooseRotation this
   where
     chooseRotation :: Char -> Pix
@@ -263,16 +263,16 @@ pixValidRotations pixValidP maze solveds cur this =
     checkDirection rotation d =
       if not bounded || curDelta `Set.member` solveds
       -- if not $ matrixBounded maze curDelta && curDelta `Set.notMember` solveds
-      then pixValidP #! (this, char, rotation, d)
+      then pixValid' (this, char, rotation, d)
       else True
         where
           bounded = matrixBounded maze curDelta
           curDelta = cursorDelta cur d
           char = if bounded then uncurry mxGetElem curDelta maze else ' '
 
-pixValidRotations' :: PixValidPrecomp -> Maze -> CursorSet -> Cursor -> Pix
-pixValidRotations' pvp maze solveds cur =
-  pixValidRotations pvp maze solveds cur (mxGetElem' cur maze)
+pixValidRotations' :: HashedFun -> Maze -> CursorSet -> Cursor -> Pix
+pixValidRotations' h maze solveds cur =
+  pixValidRotations h maze solveds cur (mxGetElem' cur maze)
 
 --
 
@@ -306,8 +306,9 @@ initialSet maze =
     onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
       where elem = uncurry mxGetElem cur maze
 
-solve :: PixValidPrecomp -> RotatePrecomp -> Maze -> [Maze]
-solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolution]
+solve :: HashedFun -> Maze -> [Maze]
+solve h@HashedFun{rotate'=rotate'} maze =
+  fromLeft [] . mapLeft pure . solve' $ [simplestPSolution]
   where
     initialContinue :: Cursor -> Continue
     initialContinue c = (0, c, uncurry mxGetElem c maze, True)
@@ -321,8 +322,8 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
       . groupSortOn (cursorShrink 4 >>= (,))
       $ initialSet maze
 
-    solve' = solveDC
-    -- solve' = solveBT
+    -- solve' = solveDC
+    solve' = solveBT
 
     -- divide and conquer by combining quadrants + backtracking
     solveDC :: [PartialSolution] -> Either Maze [PartialSolution]
@@ -358,8 +359,8 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
     solve'' _ PartialSolution{continues=[]} = []
     solve'' lifespan progress@PartialSolution{maze=maze', continues=((_, cur, this, _): continues), solveds=solveds', constraints=constraints} =
       iterGuard $ do
-        let rotations = pixValidRotations pixValidP maze' solveds' cur this
-        join . parMap rpar (\r -> solveRotation (rotP #! (this, r))) $ rotations
+        let rotations = pixValidRotations h maze' solveds' cur this
+        join . parMap rpar (\r -> solveRotation (rotate' r this)) $ rotations
 
       where
         constraintViolated maze cur = not . constraintBorderMet maze constraints $ cur
@@ -386,7 +387,7 @@ solve pixValidP rotP maze = fromLeft [] . mapLeft pure . solve' $ [simplestPSolu
             nRotations maze c ambig =
               if not ambig
               then 0
-              else length $ pixValidRotations' pixValidP maze solveds c
+              else length $ pixValidRotations' h maze solveds c
 
             cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
             cursorToContinue pix maze (c@(x, y), o) = (nRotations maze c True, c, char, direct)
@@ -411,10 +412,10 @@ traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _,
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
-      -- | True = trace traceStr
+      | True = id
+      | True = trace traceStr
       | iter `mod` 200 == 0 = trace traceStr
       | iter `mod` 200 == 0 = trace solvedStr
-      | True = id
 
     percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
     solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
@@ -449,17 +450,18 @@ computeRotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input
         get = mxGetElem x y
         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
 
-rotatePrecomputed :: RotatePrecomp
-rotatePrecomputed = HS.fromList $ list (\(c, r) -> mapPix . rotate r . mapChar $ c)
+rotatePrecomputed :: Rotation -> Char -> Char
+rotatePrecomputed = curry (HS.fromList entries #!)
   where
+    entries = list (uncurry rotateChar)
     list f = (f >>= flip (,)) `map` all
     all = do
-      p1 <- chars
       r <- rotations
-      pure (p1, r)
+      p1 <- chars
+      pure (r, p1)
 
-pixValidPrecomputed :: PixValidPrecomp
-pixValidPrecomputed = HS.fromList list
+pixValidPrecomputed :: (Char, Char, Rotation, Direction) -> Bool
+pixValidPrecomputed = (HS.fromList list #!)
   where
     list = (pixValid >>= flip (,)) `map` all
     all = do
@@ -471,11 +473,11 @@ pixValidPrecomputed = HS.fromList list
 
 main :: IO ()
 main = do
-  pixValidPrecomp <- pure pixValidPrecomputed
-  rotatePrecomp <- pure rotatePrecomputed
+  -- hashedFun <- pure $ HashedFun rotateChar pixValid
+  hashedFun <- pure $ HashedFun rotatePrecomputed pixValidPrecomputed
 
   input <- parse <$> getContents
-  solveds <- pure . solve pixValidPrecomp rotatePrecomp $ input
+  solveds <- pure . solve hashedFun $ input
 
   -- mapM_ (putStrLn . printRot . computeRotations input) $ solveds
   mapM_ (putStrLn . render) $ solveds
