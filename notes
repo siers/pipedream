@@ -158,6 +158,12 @@ i: ╸, ╹, ╺, ╻
 9. continue as list, initial as unambiguous Cursors (rotations = 1 then next unambiguous if unambiguous)
 10. a single hashtable
 
+2020-12-30-13:24:35
+1. maybe join solutions by (intersection solved empty), copy solveds, uniq continues
+2. hashtable record with functions (= 10. from previous)
+3. (not a worthwhile idea) join all continue with choice = 1 solutions
+4. nextSolution filter choice = 0
+
 --
 
 9f9a4fe
