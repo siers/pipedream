@@ -273,22 +273,26 @@ solve h@HashedFun{rotate'=rotate'} maze =
     initialContinue :: Cursor -> Continue
     initialContinue c = (0, c, uncurry mxGetElem c maze, True)
 
-    simplestPSolution = PartialSolution 0 maze [(initialContinue (1, 1))] Set.empty 5.0
+    simplestPSolution = PartialSolution 0 maze [(initialContinue (1, 1))] Set.empty 100000
 
-    -- solve' = solveDC
-    solve' = solveBT 25
+    solve' = solveBTR 25
+    -- solve' = solveBT
 
-    -- pure backtracking, restricting solutions to size circle of size r
-    solveBT :: Int -> [PartialSolution] -> Either Maze [PartialSolution]
-    solveBT _ [] = Right []
-    solveBT r (progress:ps) = do
-      heads <- sequence $ solve'' (-1) progress
-      next <- solveBT r' (map widen heads)
-      rest <- solveBT r ps
+    -- backtracking with restricting solutions to size circle of size r to die early on islands
+    solveBTR :: Int -> [PartialSolution] -> Either Maze [PartialSolution]
+    solveBTR _ [] = Right []
+    solveBTR r (progress:ps) = do
+      next <- (solveBTR r' =<<) . sequence $ solve'' (-1) (widen progress)
+      rest <- solveBTR r ps
       pure $ next ++ rest
       where
-        r' = r + 3
+        r' = r + 10
         widen = (\p@PartialSolution{constraints=c} -> p { constraints = sqrt (fromIntegral r') } )
+
+    -- pure backtracking
+    solveBT :: [PartialSolution] -> Either Maze [PartialSolution]
+    solveBT [] = Right []
+    solveBT ps = pure ps >>= sequence . (>>= solve'' (-1)) >>= solveBT
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ PartialSolution{continues=[]} = []
