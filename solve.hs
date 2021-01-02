@@ -42,7 +42,7 @@ data Progress = Progress
   { iter :: Int
   , maze :: Maze
   , continues :: [Continue]
-  -- , continues' :: CursorSet -- cached continues cursors
+  , continuesSet :: CursorSet -- cached continues cursors
   , solveds :: CursorSet
   , constraints :: Constraint }
 
@@ -288,7 +288,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
     initialContinue :: Cursor -> Continue
     initialContinue c = (0, c, uncurry mxGetElem c maze, True)
 
-    simplestPSolution = Progress 0 maze [(initialContinue (1, 1))] Set.empty 100000
+    simplestPSolution = Progress 0 maze [(initialContinue (1, 1))] Set.empty Set.empty 100000
 
     solve' = solveBTR 25
     -- solve' = solveBT
@@ -335,11 +335,12 @@ solve h@HashedFun{rotate'=rotate'} maze =
           where
             nextSolution :: Progress
             nextSolution = traceBoard $
-              Progress (iter progress + 1) maze continues solveds constraints
+              Progress (iter progress + 1) maze continues continuesSetNext solveds constraints
 
             maze = mxSetElem rotated cur maze'
 
             continues = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues constraints $ next ++ continues')
+            continuesSetNext = (continuesSet progress `Set.union` Set.fromList (map fst nextCursors)) Set.\\ solveds
             solveds = cur `Set.insert` solveds'
 
             next :: [Continue]
@@ -347,7 +348,9 @@ solve h@HashedFun{rotate'=rotate'} maze =
               filter (\(choices, _, _, d) -> choices < 2 || d)
               . map (cursorToContinue h maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
-              $ cursorDeltasSafe maze cur directions
+              $ nextCursors
+
+            nextCursors = cursorDeltasSafe maze cur directions
 
 traceBoard :: Progress -> Progress
 traceBoard progress@Progress{continues=[]} = progress
