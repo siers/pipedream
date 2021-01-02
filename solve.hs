@@ -38,20 +38,22 @@ type CursorSet = Set Cursor
 type Continue = (Int, Cursor, Char, Bool)
 type Constraint = Double -- constraint = only check continues within radius r of (0, 0)
 
-data PartialSolution = PartialSolution
+data Progress = Progress
   { iter :: Int
   , maze :: Maze
   , continues :: [Continue]
   , solveds :: CursorSet
   , constraints :: Constraint }
 
+type Solution = Either Maze [Progress]
+
 data HashedFun = HashedFun
   { rotate' :: Rotation -> Char -> Char
   , pixValid' :: (Char, Char, Rotation, Direction) -> Bool }
 
-instance Show PartialSolution where
-  show ps@PartialSolution{iter=iter, continues=continues, constraints=constraints} =
-    "PartialSolution" ++ show (iter, length continues, constraints)
+instance Show Progress where
+  show ps@Progress{iter=iter, continues=continues, constraints=constraints} =
+    "Progress" ++ show (iter, length continues, constraints)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -273,54 +275,54 @@ solve h@HashedFun{rotate'=rotate'} maze =
     initialContinue :: Cursor -> Continue
     initialContinue c = (0, c, uncurry mxGetElem c maze, True)
 
-    simplestPSolution = PartialSolution 0 maze [(initialContinue (1, 1))] Set.empty 100000
+    simplestPSolution = Progress 0 maze [(initialContinue (1, 1))] Set.empty 100000
 
     solve' = solveBTR 25
     -- solve' = solveBT
 
     -- backtracking with restricting solutions to size circle of size r to die early on islands
-    solveBTR :: Int -> [PartialSolution] -> Either Maze [PartialSolution]
+    solveBTR :: Int -> [Progress] -> Solution
     solveBTR _ [] = Right []
     solveBTR r (progress:ps) = do
-      next <- (solveBTR r' =<<) . sequence $ solve'' (-1) (widen progress)
+      next <- solveBTR r' =<< solve'' (-1) (widen progress)
       rest <- solveBTR r ps
       pure $ next ++ rest
       where
         r' = r + 10
-        widen = (\p@PartialSolution{constraints=c} -> p { constraints = sqrt (fromIntegral r') } )
+        widen = (\p@Progress{constraints=c} -> p { constraints = sqrt (fromIntegral r') } )
 
     -- pure backtracking
-    solveBT :: [PartialSolution] -> Either Maze [PartialSolution]
+    solveBT :: [Progress] -> Solution
     solveBT [] = Right []
-    solveBT ps = pure ps >>= sequence . (>>= solve'' (-1)) >>= solveBT
+    solveBT ps = pure ps >>= traverse (solve'' (-1)) >>= solveBT . join
 
-    solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
-    solve'' _ PartialSolution{continues=[]} = []
-    solve'' lifespan progress@PartialSolution{maze=maze', continues=((_, cur, this, _): continues), solveds=solveds', constraints=constraints} =
+    solve'' :: Int -> Progress -> Solution
+    solve'' _ Progress{continues=[]} = Right []
+    solve'' lifespan progress@Progress{maze=maze', continues=((_, cur, this, _): continues), solveds=solveds', constraints=constraints} =
       iterGuard $ do
         let rotations = pixValidRotations h maze' solveds' cur this
-        join . parMap rpar (\r -> solveRotation (rotate' r this)) $ rotations
+        fmap join . traverse (solveRotation . flip rotate' this) $ rotations
 
       where
         constraintViolated maze cur = not . withinRadius constraints $ cur
 
         iterGuard compute =
           if constraintViolated maze cur
-          then [Right progress]
+          then Right [progress]
           else if lifespan == 0
-            then [Right progress]
+            then Right [progress]
             else compute
 
-        solveRotation :: Char -> [Either Maze PartialSolution]
+        solveRotation :: Char -> Solution
         solveRotation rotated =
           if Set.size solveds == matrixSize maze
-          then [Left maze]
+          then Left maze
           else solve'' (lifespan - 1) nextSolution
 
           where
-            nextSolution :: PartialSolution
+            nextSolution :: Progress
             nextSolution = traceBoard $
-              PartialSolution (iter progress + 1) maze continues' solveds constraints
+              Progress (iter progress + 1) maze continues' solveds constraints
 
             nRotations :: Maze -> Cursor -> Bool -> Int
             nRotations maze c ambig =
@@ -345,9 +347,9 @@ solve h@HashedFun{rotate'=rotate'} maze =
             solveds = cur `Set.insert` solveds'
             maze = mxSetElem rotated cur maze'
 
-traceBoard :: PartialSolution -> PartialSolution
-traceBoard progress@PartialSolution{continues=[]} = progress
-traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _, _): continues), solveds=solveds} =
+traceBoard :: Progress -> Progress
+traceBoard progress@Progress{continues=[]} = progress
+traceBoard progress@Progress{iter=iter, maze=maze, continues=((_, cur, _, _): continues), solveds=solveds} =
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
