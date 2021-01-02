@@ -42,6 +42,7 @@ data Progress = Progress
   { iter :: Int
   , maze :: Maze
   , continues :: [Continue]
+  -- , continues' :: CursorSet -- cached continues cursors
   , solveds :: CursorSet
   , constraints :: Constraint }
 
@@ -252,6 +253,18 @@ pixValidRotations' :: HashedFun -> Maze -> CursorSet -> Cursor -> Pix
 pixValidRotations' h maze solveds cur =
   pixValidRotations h maze solveds cur (mxGetElem' cur maze)
 
+cursorToContinue :: HashedFun -> Maze -> CursorSet -> Pix -> (Cursor, Direction) -> Continue
+cursorToContinue h maze solveds pix (c@(x, y), o) = (nRotations maze c True, c, char, direct)
+  where
+    char = mxGetElem x y maze
+    direct = o `elem` pix
+
+    nRotations :: Maze -> Cursor -> Bool -> Int
+    nRotations maze c ambig =
+      if not ambig
+      then 0
+      else length $ pixValidRotations' h maze solveds c
+
 sortContinues :: Constraint -> [Continue] -> [Continue]
 sortContinues constraints = sortOn (\c -> (not . withinRadius constraints $ sel2 c, sel1 c))
 
@@ -298,7 +311,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
 
     solve'' :: Int -> Progress -> Solution
     solve'' _ Progress{continues=[]} = Right []
-    solve'' lifespan progress@Progress{maze=maze', continues=((_, cur, this, _): continues), solveds=solveds', constraints=constraints} =
+    solve'' lifespan progress@Progress{maze=maze', continues=((_, cur, this, _): continues'), solveds=solveds', constraints=constraints} =
       iterGuard $ do
         let rotations = pixValidRotations h maze' solveds' cur this
         fmap join . traverse (solveRotation . flip rotate' this) $ rotations
@@ -322,30 +335,19 @@ solve h@HashedFun{rotate'=rotate'} maze =
           where
             nextSolution :: Progress
             nextSolution = traceBoard $
-              Progress (iter progress + 1) maze continues' solveds constraints
+              Progress (iter progress + 1) maze continues solveds constraints
 
-            nRotations :: Maze -> Cursor -> Bool -> Int
-            nRotations maze c ambig =
-              if not ambig
-              then 0
-              else length $ pixValidRotations' h maze solveds c
+            maze = mxSetElem rotated cur maze'
 
-            cursorToContinue :: Pix -> Maze -> (Cursor, Direction) -> Continue
-            cursorToContinue pix maze (c@(x, y), o) = (nRotations maze c True, c, char, direct)
-              where
-                char = mxGetElem x y maze
-                direct = o `elem` pix
+            continues = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues constraints $ next ++ continues')
+            solveds = cur `Set.insert` solveds'
 
             next :: [Continue]
             next =
               filter (\(choices, _, _, d) -> choices < 2 || d)
-              . map (cursorToContinue (mapChar rotated) maze)
+              . map (cursorToContinue h maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
-
-            continues' = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues constraints $ next ++ continues)
-            solveds = cur `Set.insert` solveds'
-            maze = mxSetElem rotated cur maze'
 
 traceBoard :: Progress -> Progress
 traceBoard progress@Progress{continues=[]} = progress
