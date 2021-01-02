@@ -276,15 +276,19 @@ solve h@HashedFun{rotate'=rotate'} maze =
     simplestPSolution = PartialSolution 0 maze [(initialContinue (1, 1))] Set.empty 5.0
 
     -- solve' = solveDC
-    solve' = solveBT 5
+    solve' = solveBT 25
 
     -- pure backtracking, restricting solutions to size circle of size r
     solveBT :: Int -> [PartialSolution] -> Either Maze [PartialSolution]
     solveBT _ [] = Right []
-    solveBT r ps = do
-      ps <- sequence $ ps >>= solve'' (-1)
-      solveBT r' . map (\p@PartialSolution{constraints=c} -> p { constraints = (fromIntegral r') } ) $ ps
-      where r' = r + 5
+    solveBT r (progress:ps) = do
+      heads <- sequence $ solve'' (-1) progress
+      next <- solveBT r' (map widen heads)
+      rest <- solveBT r ps
+      pure $ next ++ rest
+      where
+        r' = r + 3
+        widen = (\p@PartialSolution{constraints=c} -> p { constraints = sqrt (fromIntegral r') } )
 
     solve'' :: Int -> PartialSolution -> [Either Maze PartialSolution]
     solve'' _ PartialSolution{continues=[]} = []
@@ -370,14 +374,14 @@ traceBoard progress@PartialSolution{iter=iter, maze=maze, continues=((_, cur, _,
 printRot :: [CursorRot] -> String
 printRot =
   unlines
-  . map (\(x, y) -> "rotate " ++ show (x - 1) ++ " " ++ show (y - 1))
+  . map (\(x, y) -> "rotate " ++ show x ++ " " ++ show y)
   . (>>= (\(x, y, r) -> take r (repeat (x, y))))
   . reverse
 
 computeRotations :: Maze -> Maze -> [CursorRot]
-computeRotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input) $ cursorRot
+computeRotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input) $ cursorRot . to0Cursor
   where
-    cursorRot (y, x) = (x, y, get input `rotations` get solved)
+    cursorRot (x, y) = (x, y, get input `rotations` get solved)
       where
         get = mxGetElem x y
         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from

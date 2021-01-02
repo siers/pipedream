@@ -1,3 +1,4 @@
 solve
 *.hi
 *.o
+*.prof
