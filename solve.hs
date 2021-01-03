@@ -267,28 +267,25 @@ sortContinues constraints = id
 -- sortContinues constraints = sortOn (\c -> sel1 c)
 -- sortContinues constraints = sortOn (\c -> (not . withinRadius constraints $ sel2 c, sel1 c))
 
--- cursor mustn't be in solveds
-cursorIsolated :: Progress -> Cursor -> Bool
-cursorIsolated p@Progress{maze=maze, continuesSet=continuesSet, solveds=solveds} c =
-  Left () /= isolated Set.empty [c]
+-- continue cursors reachable from c
+cursorsReachable :: Progress -> Cursor -> [Cursor]
+cursorsReachable p@Progress{maze=maze, continuesSet=continuesSet, solveds=solveds} c =
+  fst . isolated Set.empty $ ([], [c])
   where
-    isolated :: CursorSet -> [Cursor] -> Either () [Cursor]
-    isolated _ [] = Right []
-    isolated visited (c:cs) = do
-      nexts <- isolated' visited' c
-      isolated visited' . dropWhile (`Set.member` visited') $ cs ++ nexts
-      where visited' = (c `Set.insert` visited)
+    isolated :: CursorSet -> ([Cursor], [Cursor]) -> ([Cursor], [Cursor])
+    isolated _ (found, []) = (found, [])
+    isolated visited (found, (n:next)) =
+      let (found', next') = isolated' visited' n
+      in isolated visited' (found ++ found', dropWhile (`Set.member` visited') $ next' ++ next)
+      where visited' = (n `Set.insert` visited)
 
-    isolated' :: CursorSet -> Cursor -> Either () [Cursor]
+    isolated' :: CursorSet -> Cursor -> ([Cursor], [Cursor])
     isolated' visited c =
       let
         deltas = map fst $ cursorDeltasSafe maze c directions
         next = unvisited [visited, solveds] `filter` deltas
       in
-        if (`Set.member` continuesSet) `any` next
-        -- if (not . (`Set.member` continuesSet)) `all` next
-        then Left ()
-        else Right next
+        ((`Set.member` continuesSet) `filter` next, next)
 
     unvisited :: [CursorSet] -> Cursor -> Bool
     unvisited visited c = all (not . Set.member c) visited
@@ -359,7 +356,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
           else
             -- solve'' (lifespan - 1) nextSolution
 
-            if all (not . cursorIsolated nextSolution . sel2) islands
+            if all (not . null . cursorsReachable nextSolution . sel2) islands
             -- if t $ all (not . cursorIsolated nextSolution . sel2) $ islands
             -- if t $ all (not . cursorIsolated nextSolution . sel2) $ trace (show ("islands", cur, islands, (), next)) islands
             then solve'' (lifespan - 1) nextSolution
