@@ -261,7 +261,6 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = (nRotations maze c, c, char,
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
 sortContinues :: [Continue] -> [Continue]
--- sortContinues = id
 sortContinues = sortOn (\c -> sel1 c)
 
 -- continue cursors reachable from c, found from Int cursor visits
@@ -334,20 +333,22 @@ solve h@HashedFun{rotate'=rotate'} maze =
           if Set.size solveds == matrixSize maze
           then Left maze
           else
-            if all (not . null . fst . cursorsReachable progress . sel2) islands
+            if all (not . null . fst) islandReachability
             then solve'' (lifespan - 1) progress
             else Right []
 
           where
-            progress :: Progress
-            progress = traceBoard $
-              Progress (iter progress' + 1) maze continues continuesSetNext solveds
+            progress = p { continues = sortContinues continues }
+              where p = Progress (iter progress' + 1) maze continues continuesSetNext solveds
 
             maze = mxSetElem rotated cur maze'
 
-            continues = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues')
+            continues = ((`Set.member` solveds) . sel2) `dropWhile` (next ++ continues')
             continuesSetNext = (cset `Set.union` Set.fromList (map sel2 next)) Set.\\ solveds
             solveds = cur `Set.insert` solveds'
+
+            islandReachability :: [([Cursor], Int)]
+            islandReachability = map (cursorsReachable progress . sel2) islands
 
             islands, next :: [Continue]
             (islands, next) =
