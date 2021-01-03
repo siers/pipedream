@@ -3,13 +3,11 @@
 module Main where
 
 import Control.Monad (join, foldM)
-import Control.Parallel.Strategies (parMap, rpar)
 import Data.Bifunctor
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List.Extra (groupSortOn)
-import Data.List (sort, sortOn, elemIndex, uncons, concat, find, (\\), nub, partition)
+import Data.List (sort, sortOn, elemIndex, uncons, find, (\\), partition)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, listToMaybe)
