@@ -318,7 +318,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
 
     solve'' :: Int -> Progress -> Solution
     solve'' _ Progress{continues=[]} = Right []
-    solve'' lifespan progress@Progress{maze=maze', continues=((_, cur, this, _): continues'), solveds=solveds'} =
+    solve'' lifespan progress'@Progress{maze=maze', continues=((_, cur, this, _): continues'), solveds=solveds', continuesSet=cset} =
       iterGuard $ do
         let rotations = pixValidRotations h maze' solveds' cur this
         fmap join . traverse (solveRotation . flip rotate' this) $ rotations
@@ -326,7 +326,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
       where
         iterGuard compute =
           if lifespan == 0
-          then Right [progress]
+          then Right [progress']
           else compute
 
         solveRotation :: Char -> Solution
@@ -334,25 +334,25 @@ solve h@HashedFun{rotate'=rotate'} maze =
           if Set.size solveds == matrixSize maze
           then Left maze
           else
-            if all (not . null . fst . cursorsReachable nextSolution . sel2) islands
-            then solve'' (lifespan - 1) nextSolution
+            if all (not . null . fst . cursorsReachable progress . sel2) islands
+            then solve'' (lifespan - 1) progress
             else Right []
 
           where
-            nextSolution :: Progress
-            nextSolution = traceBoard $
-              Progress (iter progress + 1) maze continues continuesSetNext solveds
+            progress :: Progress
+            progress = traceBoard $
+              Progress (iter progress' + 1) maze continues continuesSetNext solveds
 
             maze = mxSetElem rotated cur maze'
 
             continues = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues')
-            continuesSetNext = (continuesSet progress `Set.union` Set.fromList (map sel2 next)) Set.\\ solveds
+            continuesSetNext = (cset `Set.union` Set.fromList (map sel2 next)) Set.\\ solveds
             solveds = cur `Set.insert` solveds'
 
             islands, next :: [Continue]
             (islands, next) =
               bimap id (filter (\(choices, _, _, d) -> choices < 1 || d))
-              . partition (\(choices, cur, _, d) -> choices > 0 && not d && not (cur `Set.member` continuesSet progress))
+              . partition (\(choices, cur, _, d) -> choices > 0 && not d && not (cur `Set.member` cset))
               . map (cursorToContinue h maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
