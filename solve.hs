@@ -36,15 +36,13 @@ type Rotation = Int
 type CursorSet = Set Cursor
 -- (# valid rotations, cursor, value, directly pointed)
 type Continue = (Int, Cursor, Char, Bool)
-type Constraint = Double -- constraint = only check continues within radius r of (0, 0)
 
 data Progress = Progress
   { iter :: Int
   , maze :: Maze
   , continues :: [Continue]
   , continuesSet :: CursorSet -- cached continues cursors
-  , solveds :: CursorSet
-  , constraints :: Constraint }
+  , solveds :: CursorSet }
 
 type Solution = Either Maze [Progress]
 
@@ -53,8 +51,8 @@ data HashedFun = HashedFun
   , pixValid' :: (Char, Char, Rotation, Direction) -> Bool }
 
 instance Show Progress where
-  show ps@Progress{iter=iter, continues=continues, constraints=constraints} =
-    "Progress" ++ show (iter, length continues, constraints)
+  show ps@Progress{iter=iter, continues=continues} =
+    "Progress" ++ show (iter, length continues)
 
 {-# INLINE (#!) #-}
 (#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
@@ -262,10 +260,9 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = (nRotations maze c, c, char,
     nRotations :: Maze -> Cursor -> Int
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
-sortContinues :: Constraint -> [Continue] -> [Continue]
-sortContinues constraints = id
--- sortContinues constraints = sortOn (\c -> sel1 c)
--- sortContinues constraints = sortOn (\c -> (not . withinRadius constraints $ sel2 c, sel1 c))
+sortContinues :: [Continue] -> [Continue]
+sortContinues = id
+-- sortContinues = sortOn (\c -> sel1 c)
 
 -- continue cursors reachable from c
 cursorsReachable :: Progress -> Cursor -> [Cursor]
@@ -310,67 +307,43 @@ solve h@HashedFun{rotate'=rotate'} maze =
     initialContinue :: Cursor -> Continue
     initialContinue c = (0, c, uncurry mxGetElem c maze, True)
 
-    simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Set.empty 100000
-
-    -- solve' = solveBTR 25
-    solve' = solveBT
-
-    -- backtracking with restricting solutions to size circle of size r to die early on islands
-    solveBTR :: Int -> [Progress] -> Solution
-    solveBTR _ [] = Right []
-    solveBTR r (progress:ps) = do
-      next <- solveBTR r' =<< solve'' (-1) (widen progress)
-      rest <- solveBTR r ps
-      pure $ next ++ rest
-      where
-        r' = r + 10
-        widen = (\p@Progress{constraints=c} -> p { constraints = sqrt (fromIntegral r') } )
+    simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Set.empty
 
     -- pure backtracking
-    solveBT :: [Progress] -> Solution
-    solveBT [] = Right []
-    solveBT ps = pure ps >>= traverse (solve'' (-1)) >>= solveBT . join
+    solve' :: [Progress] -> Solution
+    solve' [] = Right []
+    solve' ps = pure ps >>= traverse (solve'' (-1)) >>= solve' . join
 
     solve'' :: Int -> Progress -> Solution
     solve'' _ Progress{continues=[]} = Right []
-    solve'' lifespan progress@Progress{maze=maze', continues=((_, cur, this, _): continues'), solveds=solveds', constraints=constraints} =
+    solve'' lifespan progress@Progress{maze=maze', continues=((_, cur, this, _): continues'), solveds=solveds'} =
       iterGuard $ do
         let rotations = pixValidRotations h maze' solveds' cur this
         fmap join . traverse (solveRotation . flip rotate' this) $ rotations
 
       where
-        -- constraintViolated maze cur = not . withinRadius constraints $ cur
-        constraintViolated maze cur = False
-
         iterGuard compute =
-          if constraintViolated maze cur
+          if lifespan == 0
           then Right [progress]
-          else if lifespan == 0
-            then Right [progress]
-            else compute
+          else compute
 
         solveRotation :: Char -> Solution
         solveRotation rotated =
           if Set.size solveds == matrixSize maze
           then Left maze
           else
-            -- solve'' (lifespan - 1) nextSolution
-
             if all (not . null . cursorsReachable nextSolution . sel2) islands
-            -- if t $ all (not . cursorIsolated nextSolution . sel2) $ islands
-            -- if t $ all (not . cursorIsolated nextSolution . sel2) $ trace (show ("islands", cur, islands, (), next)) islands
             then solve'' (lifespan - 1) nextSolution
             else Right []
 
           where
             nextSolution :: Progress
             nextSolution = traceBoard $
-              Progress (iter progress + 1) maze continues continuesSetNext solveds constraints
+              Progress (iter progress + 1) maze continues continuesSetNext solveds
 
             maze = mxSetElem rotated cur maze'
 
-            -- continues = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues constraints $ continues' ++ next)
-            continues = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues constraints $ next ++ continues')
+            continues = ((`Set.member` solveds) . sel2) `dropWhile` (sortContinues $ next ++ continues')
             continuesSetNext = (continuesSet progress `Set.union` Set.fromList (map sel2 next)) Set.\\ solveds
             solveds = cur `Set.insert` solveds'
 
