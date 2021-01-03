@@ -1,0 +1,22 @@
+name:           solve
+version:        0.1.0.0
+synopsis:       solves maze
+description:    solves maze
+author:         siers
+maintainer:     wimuan@gmail.com
+build-type:     Simple
+cabal-version:  >= 1.10
+
+executable solve
+  main-is: solve.hs
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwarn-unused-imports
+  build-depends:
+      base
+    , matrix
+    , containers
+    , unordered-containers
+    , hashable
+    , extra
+    , tuple
+    , parallel
+  default-language: Haskell2010
