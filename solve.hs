@@ -260,8 +260,8 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = (nRotations maze c, c, char,
     nRotations :: Maze -> Cursor -> Int
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
-sortContinues :: [Continue] -> [Continue]
-sortContinues = sortOn (\c -> sel1 c)
+sortContinues :: Progress -> [Continue] -> [Continue]
+sortContinues p = sortOn (\cont -> (snd . cursorsReachable p $ (sel2 cont), sel1 cont))
 
 -- continue cursors reachable from c, found from Int cursor visits
 cursorsReachable :: Progress -> Cursor -> ([Cursor], Int)
@@ -333,22 +333,19 @@ solve h@HashedFun{rotate'=rotate'} maze =
           if Set.size solveds == matrixSize maze
           then Left maze
           else
-            if all (not . null . fst) islandReachability
-            then solve'' (lifespan - 1) progress
+            if all (not . null . fst . cursorsReachable progressRaw . sel2) islands
+            then solve'' (lifespan - 1) . traceBoard $ progress
             else Right []
 
           where
-            progress = p { continues = sortContinues continues }
-              where p = Progress (iter progress' + 1) maze continues continuesSetNext solveds
+            progress = progressRaw { continues = sortContinues progressRaw continues }
+            progressRaw = Progress (iter progress' + 1) maze continues continuesSetNext solveds
 
             maze = mxSetElem rotated cur maze'
 
             continues = ((`Set.member` solveds) . sel2) `dropWhile` (next ++ continues')
             continuesSetNext = (cset `Set.union` Set.fromList (map sel2 next)) Set.\\ solveds
             solveds = cur `Set.insert` solveds'
-
-            islandReachability :: [([Cursor], Int)]
-            islandReachability = map (cursorsReachable progress . sel2) islands
 
             islands, next :: [Continue]
             (islands, next) =
@@ -365,8 +362,8 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=((_, cur, _, _): co
   where
     tracer iter -- reorder clauses to disable tracing
       -- | True = id
-      | True = trace traceStr
-      | iter `mod` 200 == 0 = trace traceStr
+      -- | True = trace traceStr
+      | iter `mod` 40 == 0 = trace traceStr
       | iter `mod` 200 == 0 = trace solvedStr
       | True = id
 
