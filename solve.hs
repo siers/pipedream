@@ -286,6 +286,16 @@ cursorsReachable p@Progress{maze=maze, continuesSet=continuesSet, solveds=solved
     unvisited :: [CursorSet] -> Cursor -> Bool
     unvisited visited c = all (not . Set.member c) visited
 
+continuePartitions :: Progress -> [Continue] -> [([Continue], Int)]
+continuePartitions _ [] = []
+continuePartitions p (c:cs) =
+  let
+    (neighbours, count) = cursorsReachable p (sel2 c)
+    neighboursC = c : filterContinueCur (\c -> any (c ==) neighbours) cs
+    filterContinueCur f cs = filter (\c -> f (sel2 c)) cs
+  in (neighboursC, count) : continuePartitions p (filterContinueCur (\c -> all (c /=) (neighbours)) cs)
+  -- trace (show . intersperse "###" . map show $ continuePartitions progressRaw continues)
+
 --
 
 -- edge pieces with unambiguous rotations
