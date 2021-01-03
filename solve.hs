@@ -261,20 +261,22 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = (nRotations maze c, c, char,
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
 sortContinues :: [Continue] -> [Continue]
-sortContinues = id
--- sortContinues = sortOn (\c -> sel1 c)
+-- sortContinues = id
+sortContinues = sortOn (\c -> sel1 c)
 
--- continue cursors reachable from c
-cursorsReachable :: Progress -> Cursor -> [Cursor]
+-- continue cursors reachable from c, found from Int cursor visits
+cursorsReachable :: Progress -> Cursor -> ([Cursor], Int)
 cursorsReachable p@Progress{maze=maze, continuesSet=continuesSet, solveds=solveds} c =
-  fst . isolated Set.empty $ ([], [c])
+  (\(x, y, _) -> (x, y)) . isolated Set.empty $ ([], 0, [c])
   where
-    isolated :: CursorSet -> ([Cursor], [Cursor]) -> ([Cursor], [Cursor])
-    isolated _ (found, []) = (found, [])
-    isolated visited (found, (n:next)) =
+    isolated :: CursorSet -> ([Cursor], Int, [Cursor]) -> ([Cursor], Int, [Cursor])
+    isolated _ s@(_, _, []) = s
+    isolated visited (found, size, (n:next)) =
       let (found', next') = isolated' visited' n
-      in isolated visited' (found ++ found', dropWhile (`Set.member` visited') $ next' ++ next)
-      where visited' = (n `Set.insert` visited)
+      in isolated visited' (found ++ found', size + length next', clean $ next' ++ next)
+      where
+        visited' = (n `Set.insert` visited)
+        clean = dropWhile (`Set.member` visited')
 
     isolated' :: CursorSet -> Cursor -> ([Cursor], [Cursor])
     isolated' visited c =
@@ -332,7 +334,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
           if Set.size solveds == matrixSize maze
           then Left maze
           else
-            if all (not . null . cursorsReachable nextSolution . sel2) islands
+            if all (not . null . fst . cursorsReachable nextSolution . sel2) islands
             then solve'' (lifespan - 1) nextSolution
             else Right []
 
