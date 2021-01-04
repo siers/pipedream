@@ -266,7 +266,9 @@ sortContinues :: Progress -> [Continue] -> [Continue]
 sortContinues p cs = sortOn (\cont -> (snd <$> find (any (cursor cont ==) . fst) islands, depth cont)) cs
   where
     depth :: Continue -> Int
-    depth c = (\(x, y) -> x + y) $ cursor c
+    -- depth c = created c
+    -- depth c = (\(x, y) -> x + y) $ cursor c
+    depth c = created c + (choices c) * 10
 
     islands :: [([Cursor], Int)]
     islands = sortOn (length . fst) $ cursorPartitions p . map cursor $ cs
