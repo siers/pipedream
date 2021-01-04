@@ -36,7 +36,8 @@ data Continue = Continue
   { cursor :: Cursor
   , cchar :: Char
   , choices :: Int
-  , direct :: Bool }
+  , direct :: Bool
+  , created :: Int } -- created at iter
 
 data Progress = Progress
   { iter :: Int
@@ -253,7 +254,7 @@ pixValidRotations' h maze solveds cur =
   pixValidRotations h maze solveds cur (mxGetElem' cur maze)
 
 cursorToContinue :: HashedFun -> Maze -> CursorSet -> Pix -> (Cursor, Direction) -> Continue
-cursorToContinue h maze solveds pix (c@(x, y), o) = Continue c char (nRotations maze c) direct
+cursorToContinue h maze solveds pix (c@(x, y), o) = Continue c char (nRotations maze c) direct 0
   where
     char = mxGetElem x y maze
     direct = o `elem` pix
@@ -330,7 +331,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
   fromLeft [] . mapLeft pure . solve' $ [simplestPSolution]
   where
     initialContinue :: Cursor -> Continue
-    initialContinue c = Continue c (uncurry mxGetElem c maze) 0 True
+    initialContinue c = Continue c (uncurry mxGetElem c maze) 0 True 0
 
     simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Set.empty
 
@@ -375,7 +376,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
             (islands, next) =
               bimap id (filter (\Continue{choices=c, direct=d} -> c < 1 || d))
               . partition (\Continue{cursor=cur, choices=c, direct=d} -> c > 0 && not d && not (cur `Set.member` cset))
-              . map (cursorToContinue h maze solveds (mapChar rotated))
+              . map ((\c -> c { created = iter progress }) . cursorToContinue h maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
