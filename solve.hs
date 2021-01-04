@@ -263,12 +263,16 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = Continue c char (nRotations 
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
 sortContinues :: Progress -> [Continue] -> [Continue]
-sortContinues p cs = sortOn (\cont -> (snd <$> find (any (cursor cont ==) . fst) islands, depth cont)) cs
+sortContinues p cs = sortOn key cs
   where
+    key cont = (snd <$> find (any (cursor cont ==) . fst) islands, depth cont)
+    -- key cont = depth cont
+
     depth :: Continue -> Int
     -- depth c = created c
     -- depth c = (\(x, y) -> x + y) $ cursor c
-    depth c = created c + (choices c) * 10
+    depth c = created c + (choices c) * 5
+    -- depth c = created c + (choices c) * 100
 
     islands :: [([Cursor], Int)]
     islands = sortOn (length . fst) $ cursorPartitions p . map cursor $ cs
@@ -344,7 +348,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
 
     solve'' :: Int -> Progress -> Solution
     solve'' _ Progress{continues=[]} = Right []
-    solve'' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this}: continues'), solveds=solveds', continuesSet=cset} =
+    solve'' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created=created}: continues'), solveds=solveds', continuesSet=cset} =
       iterGuard $ do
         let rotations = pixValidRotations h maze' solveds' cur this
         fmap join . traverse (solveRotation . flip rotate' this) $ rotations
@@ -378,7 +382,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
             (islands, next) =
               bimap id (filter (\Continue{choices=c, direct=d} -> c < 1 || d))
               . partition (\Continue{cursor=cur, choices=c, direct=d} -> c > 0 && not d && not (cur `Set.member` cset))
-              . map ((\c -> c { created = iter progress }) . cursorToContinue h maze solveds (mapChar rotated))
+              . map ((\c -> c { created = created + 1 }) . cursorToContinue h maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
@@ -390,8 +394,8 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
     tracer iter -- reorder clauses to disable tracing
       --  | True = id
       --  | True = trace traceStr
-      | iter `mod` 20 == 0 = trace traceStr
-      | iter `mod` 200 == 0 = trace solvedStr
+      | iter `mod` 100 == 0 = trace traceStr
+      | iter `mod` 100 == 0 = trace solvedStr
       | True = id
 
     percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
