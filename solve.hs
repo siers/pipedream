@@ -12,7 +12,6 @@ import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, listToMaybe)
 import Data.Set (Set)
-import Data.Tuple.Select
 import Data.Tuple (swap)
 import Debug.Trace
 import qualified Data.HashMap.Strict as HS
@@ -33,7 +32,11 @@ type Rotation = Int
 
 type CursorSet = Set Cursor
 -- (# valid rotations, cursor, value, directly pointed)
-type Continue = (Int, Cursor, Char, Bool)
+data Continue = Continue
+  { cursor :: Cursor
+  , cchar :: Char
+  , choices :: Int
+  , direct :: Bool }
 
 data Progress = Progress
   { iter :: Int
@@ -250,7 +253,7 @@ pixValidRotations' h maze solveds cur =
   pixValidRotations h maze solveds cur (mxGetElem' cur maze)
 
 cursorToContinue :: HashedFun -> Maze -> CursorSet -> Pix -> (Cursor, Direction) -> Continue
-cursorToContinue h maze solveds pix (c@(x, y), o) = (nRotations maze c, c, char, direct)
+cursorToContinue h maze solveds pix (c@(x, y), o) = Continue c char (nRotations maze c) direct
   where
     char = mxGetElem x y maze
     direct = o `elem` pix
@@ -259,13 +262,13 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = (nRotations maze c, c, char,
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
 sortContinues :: Progress -> [Continue] -> [Continue]
-sortContinues p cs = sortOn (\cont -> (snd <$> find (any (sel2 cont ==) . fst) islands, depth cont)) cs
+sortContinues p cs = sortOn (\cont -> (snd <$> find (any (cursor cont ==) . fst) islands, depth cont)) cs
   where
     depth :: Continue -> Int
-    depth c = (\(x, y) -> x + y) $ sel2 c
+    depth c = (\(x, y) -> x + y) $ cursor c
 
     islands :: [([Cursor], Int)]
-    islands = sortOn (length . fst) $ cursorPartitions p . map sel2 $ cs
+    islands = sortOn (length . fst) $ cursorPartitions p . map cursor $ cs
 
 -- continue cursors reachable from c, found from Int cursor visits
 cursorsReachable :: Progress -> Cursor -> ([Cursor], Int)
@@ -300,14 +303,14 @@ cursorPartitions p (c:cs) =
     neighboursC = c : filter (\c -> any (c ==) neighbours) cs
   in (neighboursC, count) : cursorPartitions p (filter (\c -> all (c /=) (neighbours)) cs)
 
-continuePartitions :: Progress -> [Continue] -> [([Continue], Int)]
-continuePartitions _ [] = []
-continuePartitions p (c:cs) =
-  let
-    (neighbours, count) = cursorsReachable p (sel2 c)
-    neighboursC = c : filterContinueCur (\c -> any (c ==) neighbours) cs
-    filterContinueCur f cs = filter (\c -> f (sel2 c)) cs
-  in (neighboursC, count) : continuePartitions p (filterContinueCur (\c -> all (c /=) (neighbours)) cs)
+-- continuePartitions :: Progress -> [Continue] -> [([Continue], Int)]
+-- continuePartitions _ [] = []
+-- continuePartitions p (c:cs) =
+--   let
+--     (neighbours, count) = cursorsReachable p (sel2 c)
+--     neighboursC = c : filterContinueCur (\c -> any (c ==) neighbours) cs
+--     filterContinueCur f cs = filter (\c -> f (sel2 c)) cs
+--   in (neighboursC, count) : continuePartitions p (filterContinueCur (\c -> all (c /=) (neighbours)) cs)
 
 --
 
@@ -327,7 +330,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
   fromLeft [] . mapLeft pure . solve' $ [simplestPSolution]
   where
     initialContinue :: Cursor -> Continue
-    initialContinue c = (0, c, uncurry mxGetElem c maze, True)
+    initialContinue c = Continue c (uncurry mxGetElem c maze) 0 True
 
     simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Set.empty
 
@@ -338,7 +341,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
 
     solve'' :: Int -> Progress -> Solution
     solve'' _ Progress{continues=[]} = Right []
-    solve'' lifespan progress'@Progress{maze=maze', continues=((_, cur, this, _): continues'), solveds=solveds', continuesSet=cset} =
+    solve'' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this}: continues'), solveds=solveds', continuesSet=cset} =
       iterGuard $ do
         let rotations = pixValidRotations h maze' solveds' cur this
         fmap join . traverse (solveRotation . flip rotate' this) $ rotations
@@ -354,7 +357,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
           if Set.size solveds == matrixSize maze
           then Left maze
           else
-            if all (not . null . fst . cursorsReachable progressRaw . sel2) islands
+            if all (not . null . fst . cursorsReachable progressRaw . cursor) islands
             then solve'' (lifespan - 1) . traceBoard $ progress
             else Right []
 
@@ -364,26 +367,26 @@ solve h@HashedFun{rotate'=rotate'} maze =
 
             maze = mxSetElem rotated cur maze'
 
-            continues = ((`Set.member` solveds) . sel2) `dropWhile` (next ++ continues')
-            continuesSetNext = (cset `Set.union` Set.fromList (map sel2 next)) Set.\\ solveds
+            continues = ((`Set.member` solveds) . cursor) `dropWhile` (next ++ continues')
+            continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ solveds
             solveds = cur `Set.insert` solveds'
 
             islands, next :: [Continue]
             (islands, next) =
-              bimap id (filter (\(choices, _, _, d) -> choices < 1 || d))
-              . partition (\(choices, cur, _, d) -> choices > 0 && not d && not (cur `Set.member` cset))
+              bimap id (filter (\Continue{choices=c, direct=d} -> c < 1 || d))
+              . partition (\Continue{cursor=cur, choices=c, direct=d} -> c > 0 && not d && not (cur `Set.member` cset))
               . map (cursorToContinue h maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
 traceBoard :: Progress -> Progress
 traceBoard progress@Progress{continues=[]} = progress
-traceBoard progress@Progress{iter=iter, maze=maze, continues=((_, cur, _, _): continues), solveds=solveds} =
+traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cur}: continues), solveds=solveds} =
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
-      -- | True = id
-      -- | True = trace traceStr
+      --  | True = id
+      --  | True = trace traceStr
       | iter `mod` 20 == 0 = trace traceStr
       | iter `mod` 200 == 0 = trace solvedStr
       | True = id
@@ -395,8 +398,8 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=((_, cur, _, _): co
     -- traceStr = clear ++ renderWithPositions positions maze
     traceStr = renderWithPositions positions maze
     -- traceStr = clear ++ render maze -- cheap
-    contFast = map sel2 . filter ((== 1) . sel1) $ continues
-    contSlow = map sel2 . filter ((>= 2) . sel1) $ continues
+    contFast = map cursor . filter ((== 1) . choices) $ continues
+    contSlow = map cursor . filter ((>= 2) . choices) $ continues
     positions =
       [ ("33", Set.singleton cur) -- yellow
       , ("34", solveds) -- blue
