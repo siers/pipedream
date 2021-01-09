@@ -270,70 +270,6 @@ sortContinues p cs = sortOn depth cs
 
 --
 
--- edge pieces with unambiguous rotations
-initialSet :: Maze -> [Cursor]
-initialSet maze =
-  map (\(cur, _, _) -> cur)
-  . sortOn (\(_, _, p) -> p)
-  $ onCur =<< (matrixBoundaryIndices maze)
-  where
-    onCur :: Cursor -> [(Cursor, Char, Int)]
-    onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
-      where elem = uncurry mxGetElem cur maze
-
-solve :: Maze -> [Maze]
-solve maze =
-  fromLeft [] . mapLeft pure . solve' $ [simplestPSolution]
-  where
-    initialContinue :: Cursor -> Continue
-    initialContinue c = Continue c (uncurry mxGetElem c maze) 0 True 0
-
-    simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Set.empty
-
-    -- pure backtracking
-    solve' :: [Progress] -> Solution
-    solve' [] = Right []
-    solve' ps = pure ps >>= traverse (solve'' (-1)) >>= solve' . join
-
-    solve'' :: Int -> Progress -> Solution
-    solve'' _ Progress{continues=[]} = Right []
-    solve'' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created=created}: continues'), solveds=solveds', continuesSet=cset} =
-      iterGuard $ do
-        let rotations = pixValidRotations maze' solveds' cur
-        fmap join . traverse (solveRotation . flip rotateChar this) $ rotations
-
-      where
-        iterGuard compute =
-          if lifespan == 0
-          then Right [progress']
-          else compute
-
-        solveRotation :: Char -> Solution
-        solveRotation rotated =
-          if Set.size solveds == matrixSize maze
-          then Left maze
-          else
-            solve'' (lifespan - 1) . traceBoard $ progress
-
-          where
-            progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues }
-            progressRaw = Progress (iter progress' + 1) maze continues continuesSetNext solveds
-
-            maze = mxSetElem rotated cur maze'
-
-            dropBad = dropWhile ((`Set.member` solveds) . cursor)
-            continues = (next ++ continues')
-            continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ solveds
-            solveds = cur `Set.insert` solveds'
-
-            next :: [Continue]
-            next =
-              filter (\Continue{choices=c, direct=d} -> c < 2 || d)
-              . map ((\c -> c { created = created + 1 })
-              . cursorToContinue maze solveds (mapChar rotated))
-              . filter (not . (`Set.member` solveds) . fst)
-              $ cursorDeltasSafe maze cur directions
-
 traceBoard :: Progress -> Progress
 traceBoard progress@Progress{continues=[]} = progress
 traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cur}: continues), solveds=solveds} =
@@ -362,6 +298,54 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
       , ("32", Set.fromList contFast) -- green
       , ("35", Set.fromList contSlow) -- magenta
       ]
+
+solve' :: Int -> Progress -> Solution
+solve' _ Progress{continues=[]} = Right []
+solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created=created}: continues'), solveds=solveds', continuesSet=cset} =
+  iterGuard $ do
+    let rotations = pixValidRotations maze' solveds' cur
+    fmap join . traverse (solveRotation . flip rotateChar this) $ rotations
+
+  where
+    iterGuard compute =
+      if lifespan == 0
+      then Right [progress']
+      else compute
+
+    solveRotation :: Char -> Solution
+    solveRotation rotated =
+      if Set.size solveds == matrixSize maze
+      then Left maze
+      else
+        solve' (lifespan - 1) . traceBoard $ progress
+
+      where
+        progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues }
+        progressRaw = Progress (iter progress' + 1) maze continues continuesSetNext solveds
+
+        maze = mxSetElem rotated cur maze'
+
+        dropBad = dropWhile ((`Set.member` solveds) . cursor)
+        continues = (next ++ continues')
+        continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ solveds
+        solveds = cur `Set.insert` solveds'
+
+        next :: [Continue]
+        next =
+          filter (\Continue{choices=c, direct=d} -> c < 2 || d)
+          . map ((\c -> c { created = created + 1 })
+          . cursorToContinue maze solveds (mapChar rotated))
+          . filter (not . (`Set.member` solveds) . fst)
+          $ cursorDeltasSafe maze cur directions
+
+solve :: Maze -> [Maze]
+solve maze =
+  fromLeft [] . mapLeft pure . solve' (-1) $ simplestPSolution
+  where
+    initialContinue :: Cursor -> Continue
+    initialContinue c = Continue c (uncurry mxGetElem c maze) 0 True 0
+
+    simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Set.empty
 
 --
 
