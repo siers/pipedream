@@ -49,10 +49,6 @@ data Progress = Progress
 
 type Solution = Either Maze [Progress]
 
-data HashedFun = HashedFun
-  { rotate' :: Rotation -> Char -> Char
-  , pixValid' :: (Char, Char, Rotation, Direction) -> Bool }
-
 instance Show Progress where
   show ps@Progress{iter=iter, continues=continues} =
     "Progress" ++ show (iter, length continues)
@@ -232,10 +228,12 @@ pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
       thatRequires :: Pix
       thatRequires = if that == ' ' then [] else mapChar that
 
-pixValidRotations :: HashedFun -> Maze -> CursorSet -> Cursor -> Char -> Pix
-pixValidRotations HashedFun{pixValid'=pixValid'} maze solveds cur this =
+pixValidRotations :: Maze -> CursorSet -> Cursor -> Pix
+pixValidRotations maze solveds cur =
   (\r -> all (checkDirection r) directions) `filter` chooseRotation this
   where
+    this = mxGetElem' cur maze :: Char
+
     chooseRotation :: Char -> Pix
     chooseRotation '╋' = [0]
     chooseRotation '┃' = [0,1]
@@ -245,25 +243,21 @@ pixValidRotations HashedFun{pixValid'=pixValid'} maze solveds cur this =
     checkDirection rotation d =
       if not bounded || curDelta `Set.member` solveds
       -- if not $ matrixBounded maze curDelta && curDelta `Set.notMember` solveds
-      then pixValid' (this, char, rotation, d)
+      then pixValid (this, char, rotation, d)
       else True
         where
           bounded = matrixBounded maze curDelta
           curDelta = cursorDelta cur d
           char = if bounded then uncurry mxGetElem curDelta maze else ' '
 
-pixValidRotations' :: HashedFun -> Maze -> CursorSet -> Cursor -> Pix
-pixValidRotations' h maze solveds cur =
-  pixValidRotations h maze solveds cur (mxGetElem' cur maze)
-
-cursorToContinue :: HashedFun -> Maze -> CursorSet -> Pix -> (Cursor, Direction) -> Continue
-cursorToContinue h maze solveds pix (c@(x, y), o) = Continue c char (nRotations maze c) direct 0
+cursorToContinue :: Maze -> CursorSet -> Pix -> (Cursor, Direction) -> Continue
+cursorToContinue maze solveds pix (c@(x, y), o) = Continue c char (nRotations maze c) direct 0
   where
     char = mxGetElem x y maze
     direct = o `elem` pix
 
     nRotations :: Maze -> Cursor -> Int
-    nRotations maze c = length $ pixValidRotations' h maze solveds c
+    nRotations maze c = length $ pixValidRotations maze solveds c
 
 sortContinues :: Progress -> [Continue] -> [Continue]
 sortContinues p cs = sortOn depth cs
@@ -287,8 +281,8 @@ initialSet maze =
     onCur cur = (\p -> (cur, elem, p)) <$> (edgePriority ! elem)
       where elem = uncurry mxGetElem cur maze
 
-solve :: HashedFun -> Maze -> [Maze]
-solve h@HashedFun{rotate'=rotate'} maze =
+solve :: Maze -> [Maze]
+solve maze =
   fromLeft [] . mapLeft pure . solve' $ [simplestPSolution]
   where
     initialContinue :: Cursor -> Continue
@@ -305,8 +299,8 @@ solve h@HashedFun{rotate'=rotate'} maze =
     solve'' _ Progress{continues=[]} = Right []
     solve'' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created=created}: continues'), solveds=solveds', continuesSet=cset} =
       iterGuard $ do
-        let rotations = pixValidRotations h maze' solveds' cur this
-        fmap join . traverse (solveRotation . flip rotate' this) $ rotations
+        let rotations = pixValidRotations maze' solveds' cur
+        fmap join . traverse (solveRotation . flip rotateChar this) $ rotations
 
       where
         iterGuard compute =
@@ -336,7 +330,7 @@ solve h@HashedFun{rotate'=rotate'} maze =
             next =
               filter (\Continue{choices=c, direct=d} -> c < 2 || d)
               . map ((\c -> c { created = created + 1 })
-              . cursorToContinue h maze solveds (mapChar rotated))
+              . cursorToContinue maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
@@ -386,34 +380,10 @@ computeRotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input
         get = mxGetElem x y
         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
 
-rotatePrecomputed :: Rotation -> Char -> Char
-rotatePrecomputed = curry (HS.fromList entries #!)
-  where
-    entries = list (uncurry rotateChar)
-    list f = (f >>= flip (,)) `map` all
-    all = do
-      r <- rotations
-      p1 <- chars
-      pure (r, p1)
-
-pixValidPrecomputed :: (Char, Char, Rotation, Direction) -> Bool
-pixValidPrecomputed = (HS.fromList list #!)
-  where
-    list = (pixValid >>= flip (,)) `map` all
-    all = do
-      this <- chars
-      that <- charsWithSpecial
-      r <- rotations
-      d <- directions
-      pure (this, that, r, d)
-
 main :: IO ()
 main = do
-  -- hashedFun <- pure $ HashedFun rotateChar pixValid
-  hashedFun <- pure $ HashedFun rotatePrecomputed pixValidPrecomputed
-
   input <- parse <$> getContents
-  solveds <- pure . solve hashedFun $ input
+  solveds <- pure . solve $ input
 
   -- mapM_ (putStrLn . printRot . computeRotations input) $ solveds
   mapM_ (putStrLn . render) $ solveds
