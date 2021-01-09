@@ -7,7 +7,7 @@ import Data.Bifunctor
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
-import Data.List (sort, sortOn, elemIndex, uncons, find, (\\), partition)
+import Data.List (sort, sortOn, elemIndex, uncons, find, (\\))
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust, listToMaybe)
@@ -262,21 +262,6 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = Continue c char (nRotations 
     nRotations :: Maze -> Cursor -> Int
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
-sortContinues :: Progress -> [Continue] -> [Continue]
-sortContinues p cs = sortOn key cs
-  where
-    key cont = (snd <$> find (any (cursor cont ==) . fst) islands, depth cont)
-    -- key cont = depth cont
-
-    depth :: Continue -> Int
-    -- depth c = created c
-    -- depth c = (\(x, y) -> x + y) $ cursor c
-    depth c = created c + (choices c) * 5
-    -- depth c = created c + (choices c) * 100
-
-    islands :: [([Cursor], Int)]
-    islands = sortOn (length . fst) $ cursorPartitions p . map cursor $ cs
-
 -- continue cursors reachable from c, found from Int cursor visits
 cursorsReachable :: Progress -> Cursor -> ([Cursor], Int)
 cursorsReachable p@Progress{maze=maze, continuesSet=continuesSet, solveds=solveds} c =
@@ -284,9 +269,12 @@ cursorsReachable p@Progress{maze=maze, continuesSet=continuesSet, solveds=solved
   where
     isolated :: CursorSet -> ([Cursor], Int, [Cursor]) -> ([Cursor], Int, [Cursor])
     isolated _ s@(_, _, []) = s
-    isolated visited (found, size, (n:next)) =
-      let (found', next') = isolated' visited' n
-      in isolated visited' (found ++ found', size + length next', clean $ next' ++ next)
+    isolated visited solution@(found, size, (n:next)) =
+      if length found == Set.size continuesSet
+      then solution
+      else
+        let (found', next') = isolated' visited' n
+        in isolated visited' (found ++ found', size + length next', clean $ next' ++ next)
       where
         visited' = (n `Set.insert` visited)
         clean = dropWhile (`Set.member` visited')
@@ -318,6 +306,21 @@ cursorPartitions p (c:cs) =
 --     neighboursC = c : filterContinueCur (\c -> any (c ==) neighbours) cs
 --     filterContinueCur f cs = filter (\c -> f (sel2 c)) cs
 --   in (neighboursC, count) : continuePartitions p (filterContinueCur (\c -> all (c /=) (neighbours)) cs)
+
+sortContinues :: Progress -> [Continue] -> [Continue]
+sortContinues p cs = sortOn key cs
+  where
+    -- key cont = (snd <$> find (any (cursor cont ==) . fst) islands, depth cont)
+    key cont = depth cont
+
+    depth :: Continue -> Int
+    -- depth c = created c
+    -- depth c = (\(x, y) -> x + y) $ cursor c
+    depth c = created c + (choices c) * 5
+    -- depth c = created c + (choices c) * 100
+
+    islands :: [([Cursor], Int)]
+    islands = sortOn (length . fst) $ cursorPartitions p . map cursor $ cs
 
 --
 
@@ -364,25 +367,24 @@ solve h@HashedFun{rotate'=rotate'} maze =
           if Set.size solveds == matrixSize maze
           then Left maze
           else
-            if all (not . null . fst . cursorsReachable progressRaw . cursor) islands
-            then solve'' (lifespan - 1) . traceBoard $ progress
-            else Right []
+            solve'' (lifespan - 1) . traceBoard $ progress
 
           where
-            progress = progressRaw { continues = sortContinues progressRaw continues }
+            progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues }
             progressRaw = Progress (iter progress' + 1) maze continues continuesSetNext solveds
 
             maze = mxSetElem rotated cur maze'
 
-            continues = ((`Set.member` solveds) . cursor) `dropWhile` (next ++ continues')
+            dropBad = dropWhile ((`Set.member` solveds) . cursor)
+            continues = (next ++ continues')
             continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ solveds
             solveds = cur `Set.insert` solveds'
 
-            islands, next :: [Continue]
-            (islands, next) =
-              bimap id (filter (\Continue{choices=c, direct=d} -> c < 1 || d))
-              . partition (\Continue{cursor=cur, choices=c, direct=d} -> c > 0 && not d && not (cur `Set.member` cset))
-              . map ((\c -> c { created = created + 1 }) . cursorToContinue h maze solveds (mapChar rotated))
+            next :: [Continue]
+            next =
+              filter (\Continue{choices=c, direct=d} -> c < 2 || d)
+              . map ((\c -> c { created = created + 1 })
+              . cursorToContinue h maze solveds (mapChar rotated))
               . filter (not . (`Set.member` solveds) . fst)
               $ cursorDeltasSafe maze cur directions
 
@@ -393,17 +395,18 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
   where
     tracer iter -- reorder clauses to disable tracing
       --  | True = id
-      --  | True = trace traceStr
-      | iter `mod` 100 == 0 = trace traceStr
-      | iter `mod` 100 == 0 = trace solvedStr
+      -- | True = trace traceStr
+      | iter `mod` 50 == 0 = trace traceStr
+      | iter `mod` 50 == 0 = trace solvedStr
       | True = id
 
     percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
     solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     -- traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
-    -- traceStr = clear ++ renderWithPositions positions maze
-    traceStr = renderWithPositions positions maze
+    -- traceStr = show iter ++ "\n" ++ renderWithPositions positions maze
+    traceStr = clear ++ renderWithPositions positions maze
+    -- traceStr = renderWithPositions positions maze
     -- traceStr = clear ++ render maze -- cheap
     contFast = map cursor . filter ((== 1) . choices) $ continues
     contSlow = map cursor . filter ((>= 2) . choices) $ continues
