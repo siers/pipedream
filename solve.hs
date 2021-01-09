@@ -2,7 +2,7 @@
 
 module Main where
 
-import Control.Monad (join, foldM)
+import Control.Monad (join, foldM, mplus)
 import Data.Bifunctor
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
@@ -158,16 +158,20 @@ parse =
 render :: Maze -> String
 render = unlines . Mx.toLists
 
-renderWithPositions :: [(String, Set Cursor)] -> Maze -> String
-renderWithPositions targets maze =
+renderWithPositions :: Solveds -> [(String, Set Cursor)] -> Maze -> String
+renderWithPositions solveds coloredSets maze =
   unlines
   . map concat
   . Mx.toLists
   . Mx.mapPos (\cur1 c -> fmt (to0Cursor cur1) (c : []))
   $ maze
   where
-    color cur = fst <$> find (Set.member cur . snd) targets
-    fmt cur s = printf $ fromMaybe s . fmap (\c -> printf "\x1b[%sm%s\x1b[39m" c s) $ color cur
+    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) :: Int -> String
+    colorPart cur = color256 . (\(x, y) -> x * 67 + y * 23) <$> Map.lookup cur solveds
+    colorSet cur = printf "\x1b[%sm" . fst <$> find (Set.member cur . snd) coloredSets
+    color cur = colorPart cur `mplus` colorSet cur
+
+    fmt cur s = printf $ fromMaybe s . fmap (\c -> printf "%s%s\x1b[39m" c s) $ color cur
 
 -- C: n=1, CW: n=-1
 rotateDir :: Int -> Direction -> Direction
@@ -286,16 +290,15 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     -- traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
     -- traceStr = show iter ++ "\n" ++ renderWithPositions positions maze
-    traceStr = clear ++ renderWithPositions positions maze
+    traceStr = clear ++ renderWithPositions solveds positions maze
     -- traceStr = renderWithPositions positions maze
     -- traceStr = clear ++ render maze -- cheap
     contFast = map cursor . filter ((== 1) . choices) $ continues
     contSlow = map cursor . filter ((>= 2) . choices) $ continues
     positions =
       [ ("33", Set.singleton cur) -- yellow
-      , ("34", Map.keysSet solveds) -- blue
-      , ("32", Set.fromList contFast) -- green
-      , ("35", Set.fromList contSlow) -- magenta
+      , ("34", Set.fromList contFast) -- green
+      , ("32", Set.fromList contSlow) -- magenta
       ]
 
 solve' :: Int -> Progress -> Solution
@@ -327,7 +330,7 @@ solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, c
         dropBad = dropWhile ((`Map.member` solveds) . cursor)
         continues = (next ++ continues')
         continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ (Map.keysSet solveds)
-        solveds = Map.insert cur (0, 0) solveds'
+        solveds = Map.insert cur origin solveds'
 
         next :: [Continue]
         next =
