@@ -1,4 +1,4 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections, NamedFieldPuns #-}
 
 module Main where
 
@@ -52,7 +52,7 @@ data Progress = Progress
 type Solution = Either Maze [Progress]
 
 instance Show Progress where
-  show ps@Progress{iter=iter, continues=continues} =
+  show ps@Progress{iter, continues} =
     "Progress" ++ show (iter, length continues)
 
 matrixSize :: Matrix a -> Int
@@ -275,7 +275,7 @@ sortContinues p cs = sortOn depth cs
 
 traceBoard :: Progress -> Progress
 traceBoard progress@Progress{continues=[]} = progress
-traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cur}: continues), solveds=solveds} =
+traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: continues), solveds} =
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
@@ -303,7 +303,7 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
 
 solve' :: Int -> Progress -> Solution
 solve' _ Progress{continues=[]} = Right []
-solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created=created, origin=origin}: continues'), solveds=solveds', continuesSet=cset} =
+solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created, origin}: continues'), solveds=solveds', continuesSet} =
   iterGuard $ do
     fmap join . traverse (solveRotation . flip rotateChar this) $
       pixValidRotations maze' solveds' cur
@@ -329,7 +329,7 @@ solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, c
 
         dropBad = dropWhile ((`Map.member` solveds) . cursor)
         continues = (next ++ continues')
-        continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ (Map.keysSet solveds)
+        continuesSetNext = (continuesSet `Set.union` Set.fromList (map cursor next)) Set.\\ (Map.keysSet solveds)
         solveds = Map.insert cur origin solveds'
 
         next :: [Continue]
