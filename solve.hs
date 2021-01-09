@@ -39,6 +39,7 @@ data Continue = Continue
   , cchar :: Char
   , choices :: Int
   , direct :: Bool
+  , origin :: PartId
   , created :: Int } -- created at iter
 
 data Progress = Progress
@@ -247,11 +248,12 @@ pixValidRotations maze solveds cur =
           curDelta = cursorDelta cur d
           char = if bounded then uncurry mxGetElem curDelta maze else ' '
 
-cursorToContinue :: Maze -> Solveds -> Pix -> (Cursor, Direction) -> Continue
-cursorToContinue maze solveds pix (c@(x, y), o) = Continue c char (nRotations maze c) direct 0
+cursorToContinue :: Maze -> Solveds -> Pix -> PartId -> (Cursor, Direction) -> Continue
+cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotations maze c) direct origin' 0
   where
     char = mxGetElem x y maze
     direct = o `elem` pix
+    origin' = if direct then origin else c
 
     nRotations :: Maze -> Cursor -> Int
     nRotations maze c = length $ pixValidRotations maze solveds c
@@ -298,10 +300,10 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
 
 solve' :: Int -> Progress -> Solution
 solve' _ Progress{continues=[]} = Right []
-solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created=created}: continues'), solveds=solveds', continuesSet=cset} =
+solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created=created, origin=origin}: continues'), solveds=solveds', continuesSet=cset} =
   iterGuard $ do
-    let rotations = pixValidRotations maze' solveds' cur
-    fmap join . traverse (solveRotation . flip rotateChar this) $ rotations
+    fmap join . traverse (solveRotation . flip rotateChar this) $
+      pixValidRotations maze' solveds' cur
 
   where
     iterGuard compute =
@@ -330,19 +332,16 @@ solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, c
         next :: [Continue]
         next =
           filter (\Continue{choices=c, direct=d} -> c < 2 || d)
-          . map ((\c -> c { created = created + 1 })
-          . cursorToContinue maze solveds (mapChar rotated))
+          . map (\c -> c { created = created + 1 })
+          . map (cursorToContinue maze solveds (mapChar rotated) origin)
           . filter (not . (`Map.member` solveds) . fst)
           $ cursorDeltasSafe maze cur directions
 
 solve :: Maze -> [Maze]
 solve maze =
-  fromLeft [] . mapLeft pure . solve' (-1) $ simplestPSolution
-  where
-    initialContinue :: Cursor -> Continue
-    initialContinue c = Continue c (uncurry mxGetElem c maze) 0 True 0
-
-    simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Map.empty
+  fromLeft [] . mapLeft pure . solve' (-1)
+  $ Progress 0 maze [continue (0, 0)] Set.empty Map.empty
+  where continue c = Continue c (uncurry mxGetElem c maze) 0 True (0, 0) 0
 
 --
 
