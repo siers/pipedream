@@ -5,6 +5,7 @@ module Main where
 import Control.Monad (join, foldM)
 import Data.Bifunctor
 import Data.Either.Extra (fromLeft, mapLeft)
+import Data.Function (on)
 import Data.Hashable (Hashable)
 import Data.HashMap.Strict (HashMap)
 import Data.List (sort, sortOn, elemIndex, uncons, find, (\\))
@@ -220,9 +221,11 @@ withinRadius r cur = r * r > x * x + y * y
 --
 
 pixValid :: (Char, Char, Rotation, Direction) -> Bool
-pixValid (this, that, rotation, direction) =
-  filter (flipDir direction ==) thisRequires == filter (flipDir direction ==) thatRequires
+pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
     where
+      satisfied :: Pix -> Pix -> Bool
+      satisfied = (==) `on` filter (flipDir direction ==)
+
       thisRequires :: Pix
       thisRequires = (rotation + 2) `rotate` mapChar this
 
