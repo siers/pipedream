@@ -262,65 +262,14 @@ cursorToContinue h maze solveds pix (c@(x, y), o) = Continue c char (nRotations 
     nRotations :: Maze -> Cursor -> Int
     nRotations maze c = length $ pixValidRotations' h maze solveds c
 
--- continue cursors reachable from c, found from Int cursor visits
-cursorsReachable :: Progress -> Cursor -> ([Cursor], Int)
-cursorsReachable p@Progress{maze=maze, continuesSet=continuesSet, solveds=solveds} c =
-  (\(x, y, _) -> (x, y)) . isolated Set.empty $ ([], 0, [c])
-  where
-    isolated :: CursorSet -> ([Cursor], Int, [Cursor]) -> ([Cursor], Int, [Cursor])
-    isolated _ s@(_, _, []) = s
-    isolated visited solution@(found, size, (n:next)) =
-      if length found == Set.size continuesSet
-      then solution
-      else
-        let (found', next') = isolated' visited' n
-        in isolated visited' (found ++ found', size + length next', clean $ next' ++ next)
-      where
-        visited' = (n `Set.insert` visited)
-        clean = dropWhile (`Set.member` visited')
-
-    isolated' :: CursorSet -> Cursor -> ([Cursor], [Cursor])
-    isolated' visited c =
-      let
-        deltas = map fst $ cursorDeltasSafe maze c directions
-        next = unvisited [visited, solveds] `filter` deltas
-      in
-        ((`Set.member` continuesSet) `filter` next, next)
-
-    unvisited :: [CursorSet] -> Cursor -> Bool
-    unvisited visited c = all (not . Set.member c) visited
-
-cursorPartitions :: Progress -> [Cursor] -> [([Cursor], Int)]
-cursorPartitions _ [] = []
-cursorPartitions p (c:cs) =
-  let
-    (neighbours, count) = cursorsReachable p c
-    neighboursC = c : filter (\c -> any (c ==) neighbours) cs
-  in (neighboursC, count) : cursorPartitions p (filter (\c -> all (c /=) (neighbours)) cs)
-
--- continuePartitions :: Progress -> [Continue] -> [([Continue], Int)]
--- continuePartitions _ [] = []
--- continuePartitions p (c:cs) =
---   let
---     (neighbours, count) = cursorsReachable p (sel2 c)
---     neighboursC = c : filterContinueCur (\c -> any (c ==) neighbours) cs
---     filterContinueCur f cs = filter (\c -> f (sel2 c)) cs
---   in (neighboursC, count) : continuePartitions p (filterContinueCur (\c -> all (c /=) (neighbours)) cs)
-
 sortContinues :: Progress -> [Continue] -> [Continue]
-sortContinues p cs = sortOn key cs
+sortContinues p cs = sortOn depth cs
   where
-    -- key cont = (snd <$> find (any (cursor cont ==) . fst) islands, depth cont)
-    key cont = depth cont
-
     depth :: Continue -> Int
     -- depth c = created c
     -- depth c = (\(x, y) -> x + y) $ cursor c
     depth c = created c + (choices c) * 5
     -- depth c = created c + (choices c) * 100
-
-    islands :: [([Cursor], Int)]
-    islands = sortOn (length . fst) $ cursorPartitions p . map cursor $ cs
 
 --
 
