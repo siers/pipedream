@@ -6,8 +6,6 @@ import Control.Monad (join, foldM)
 import Data.Bifunctor
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
-import Data.Hashable (Hashable)
-import Data.HashMap.Strict (HashMap)
 import Data.List (sort, sortOn, elemIndex, uncons, find, (\\))
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
@@ -15,7 +13,6 @@ import Data.Maybe (fromMaybe, fromJust, listToMaybe)
 import Data.Set (Set)
 import Data.Tuple (swap)
 import Debug.Trace
-import qualified Data.HashMap.Strict as HS
 import qualified Data.Map as Map
 import qualified Data.Matrix as Mx
 import qualified Data.Set as Set
@@ -31,7 +28,11 @@ type Cursor = (Int, Int)
 type CursorRot = (Int, Int, Int)
 type Rotation = Int
 
+-- PartId distinguishes the connected graphs by their smallest cursor (by def. ascending order)
+type PartId = Cursor
+type Solveds = Map Cursor PartId
 type CursorSet = Set Cursor
+
 -- (# valid rotations, cursor, value, directly pointed)
 data Continue = Continue
   { cursor :: Cursor
@@ -45,17 +46,13 @@ data Progress = Progress
   , maze :: Maze
   , continues :: [Continue]
   , continuesSet :: CursorSet -- cached continues cursors
-  , solveds :: CursorSet }
+  , solveds :: Solveds }
 
 type Solution = Either Maze [Progress]
 
 instance Show Progress where
   show ps@Progress{iter=iter, continues=continues} =
     "Progress" ++ show (iter, length continues)
-
-{-# INLINE (#!) #-}
-(#!) :: (Eq k, Hashable k) => HashMap k v -> k -> v
-(#!) = (HS.!)
 
 matrixSize :: Matrix a -> Int
 matrixSize m = nrows m * ncols m
@@ -228,7 +225,7 @@ pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
       thatRequires :: Pix
       thatRequires = if that == ' ' then [] else mapChar that
 
-pixValidRotations :: Maze -> CursorSet -> Cursor -> Pix
+pixValidRotations :: Maze -> Solveds -> Cursor -> Pix
 pixValidRotations maze solveds cur =
   (\r -> all (checkDirection r) directions) `filter` chooseRotation this
   where
@@ -241,7 +238,7 @@ pixValidRotations maze solveds cur =
     chooseRotation _ = rotations
 
     checkDirection rotation d =
-      if not bounded || curDelta `Set.member` solveds
+      if not bounded || curDelta `Map.member` solveds
       -- if not $ matrixBounded maze curDelta && curDelta `Set.notMember` solveds
       then pixValid (this, char, rotation, d)
       else True
@@ -250,7 +247,7 @@ pixValidRotations maze solveds cur =
           curDelta = cursorDelta cur d
           char = if bounded then uncurry mxGetElem curDelta maze else ' '
 
-cursorToContinue :: Maze -> CursorSet -> Pix -> (Cursor, Direction) -> Continue
+cursorToContinue :: Maze -> Solveds -> Pix -> (Cursor, Direction) -> Continue
 cursorToContinue maze solveds pix (c@(x, y), o) = Continue c char (nRotations maze c) direct 0
   where
     char = mxGetElem x y maze
@@ -282,7 +279,7 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
       | iter `mod` 50 == 0 = trace solvedStr
       | True = id
 
-    percentage = (fromIntegral $ Set.size solveds) / (fromIntegral $ matrixSize maze)
+    percentage = (fromIntegral $ Map.size solveds) / (fromIntegral $ matrixSize maze)
     solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     -- traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
@@ -294,7 +291,7 @@ traceBoard progress@Progress{iter=iter, maze=maze, continues=(Continue{cursor=cu
     contSlow = map cursor . filter ((>= 2) . choices) $ continues
     positions =
       [ ("33", Set.singleton cur) -- yellow
-      , ("34", solveds) -- blue
+      , ("34", Map.keysSet solveds) -- blue
       , ("32", Set.fromList contFast) -- green
       , ("35", Set.fromList contSlow) -- magenta
       ]
@@ -314,7 +311,7 @@ solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, c
 
     solveRotation :: Char -> Solution
     solveRotation rotated =
-      if Set.size solveds == matrixSize maze
+      if Map.size solveds == matrixSize maze
       then Left maze
       else
         solve' (lifespan - 1) . traceBoard $ progress
@@ -325,17 +322,17 @@ solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, c
 
         maze = mxSetElem rotated cur maze'
 
-        dropBad = dropWhile ((`Set.member` solveds) . cursor)
+        dropBad = dropWhile ((`Map.member` solveds) . cursor)
         continues = (next ++ continues')
-        continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ solveds
-        solveds = cur `Set.insert` solveds'
+        continuesSetNext = (cset `Set.union` Set.fromList (map cursor next)) Set.\\ (Map.keysSet solveds)
+        solveds = Map.insert cur (0, 0) solveds'
 
         next :: [Continue]
         next =
           filter (\Continue{choices=c, direct=d} -> c < 2 || d)
           . map ((\c -> c { created = created + 1 })
           . cursorToContinue maze solveds (mapChar rotated))
-          . filter (not . (`Set.member` solveds) . fst)
+          . filter (not . (`Map.member` solveds) . fst)
           $ cursorDeltasSafe maze cur directions
 
 solve :: Maze -> [Maze]
@@ -345,7 +342,7 @@ solve maze =
     initialContinue :: Cursor -> Continue
     initialContinue c = Continue c (uncurry mxGetElem c maze) 0 True 0
 
-    simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Set.empty
+    simplestPSolution = Progress 0 maze [(initialContinue (0, 0))] Set.empty Map.empty
 
 --
 
