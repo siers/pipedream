@@ -27,8 +27,9 @@ type Cursor = (Int, Int)
 type CursorRot = (Int, Int, Int)
 type Rotation = Int
 
--- PartId distinguishes the connected graphs by their smallest cursor (by def. ascending order)
+-- PartId distinguishes the connected graphs (partitions) by their smallest cursor (by def. ascending order)
 type PartId = Cursor
+type PartEquiv = Map PartId PartId
 type Solveds = Map Cursor PartId
 type CursorSet = Set Cursor
 
@@ -46,7 +47,8 @@ data Progress = Progress
   , maze :: Maze
   , continues :: [Continue]
   , continuesSet :: CursorSet -- cached continues cursors
-  , solveds :: Solveds }
+  , solveds :: Solveds
+  , partEquiv :: PartEquiv } -- partition equivalence (if b connects to a, then add (b, a) to map)
 
 type Solution = Either Maze [Progress]
 
@@ -78,6 +80,17 @@ mxGetElem' = uncurry mxGetElem
 
 mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
 mxSetElem v (x, y) m = Mx.setElem v (y + 1, x + 1) m
+
+converge :: Eq a => (a -> a) -> a -> a
+converge = until =<< ((==) =<<)
+
+-- stops at first cycle
+lookupConverge :: (Ord v, Eq v, Show v) => Map v v -> v -> v
+lookupConverge m v = converge (\v' -> lookup v $ v') $ lookupDef v
+  where
+    lookup first val = fromJust . def (Just first) . fmap lookupDef . find (/= first) $ Just val
+    lookupDef v = fromMaybe v . flip Map.lookup m $ v
+    def val = flip mplus val
 
 --
 
@@ -142,8 +155,8 @@ parse =
 render :: Maze -> String
 render = unlines . Mx.toLists
 
-renderWithPositions :: Solveds -> [(String, Set Cursor)] -> Maze -> String
-renderWithPositions solveds coloredSets maze =
+renderWithPositions :: Solveds -> PartEquiv -> [(String, Set Cursor)] -> Maze -> String
+renderWithPositions solveds partEquiv coloredSets maze =
   unlines
   . map concat
   . Mx.toLists
@@ -151,7 +164,7 @@ renderWithPositions solveds coloredSets maze =
   $ maze
   where
     color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) :: Int -> String
-    colorPart cur = color256 . (\(x, y) -> x * 67 + y * 23) <$> Map.lookup cur solveds
+    colorPart cur = color256 . (\(x, y) -> x * 67 + y * 23) . lookupConverge partEquiv <$> Map.lookup cur solveds
     colorSet cur = printf "\x1b[%sm" . fst <$> find (Set.member cur . snd) coloredSets
     color cur = colorPart cur `mplus` colorSet cur
 
@@ -243,12 +256,13 @@ sortContinues p cs = sortOn depth cs
 
 traceBoard :: Progress -> Progress
 traceBoard progress@Progress{continues=[]} = progress
-traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: continues), solveds} =
+traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: continues), solveds, partEquiv} =
   tracer iter progress
   where
     tracer iter -- reorder clauses to disable tracing
+      | Map.size solveds == matrixSize maze - 1 = trace traceStr
       --  | True = id
-      -- | True = trace traceStr
+      --  | True = trace traceStr
       | iter `mod` 50 == 0 = trace traceStr
       | iter `mod` 50 == 0 = trace solvedStr
       | True = id
@@ -258,7 +272,7 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     -- traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
     -- traceStr = show iter ++ "\n" ++ renderWithPositions positions maze
-    traceStr = clear ++ renderWithPositions solveds positions maze
+    traceStr = clear ++ renderWithPositions solveds partEquiv positions maze
     -- traceStr = renderWithPositions positions maze
     -- traceStr = clear ++ render maze -- cheap
     contFast = map cursor . filter ((== 1) . choices) $ continues
@@ -271,15 +285,15 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
 
 solveRotation :: Progress -> Continue -> Solution
 solveRotation
-  Progress{iter, maze=maze, continues, solveds=solveds, continuesSet}
-  Continue{cursor=cur, cchar=rotated, created, origin} =
+  Progress{iter, maze=maze, continues, solveds=solveds, continuesSet, partEquiv}
+  Continue{cursor=cur, cchar=this, created, origin} =
     if Map.size solveds == matrixSize maze
     then Left maze
     else solve' . traceBoard $ progress
 
   where
     progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues' }
-    progressRaw = Progress (iter + 1) maze continues' continuesSet' solveds
+    progressRaw = Progress (iter + 1) maze continues' continuesSet' solveds partEquiv'
 
     dropBad = dropWhile ((`Map.member` solveds) . cursor)
     continues' = (next ++ continues)
@@ -289,9 +303,14 @@ solveRotation
     next =
       filter (\Continue{choices=c, direct=d} -> c < 2 || d)
       . map (\c -> c { created = created + 1 })
-      . map (cursorToContinue maze solveds (toPix rotated) origin)
+      . map (cursorToContinue maze solveds (toPix this) origin')
       . filter (not . (`Map.member` solveds) . fst)
       $ cursorDeltasSafe maze cur directions
+
+    neighbours = map (lookupConverge partEquiv . fst) $ cursorDeltasSafe maze cur (toPix this)
+    (origin':neighbours') = sort $ neighbours ++ [origin]
+
+    partEquiv' = foldr (uncurry Map.insert) partEquiv $ (, origin') <$> neighbours'
 
 solve' :: Progress -> Solution
 solve' Progress{continues=[]} = Right []
@@ -310,7 +329,7 @@ solve' progress@Progress{maze=maze, continues=(continue: continues), solveds=sol
 solve :: Maze -> [Maze]
 solve maze =
   fromLeft [] . mapLeft pure . solve'
-  $ Progress 0 maze [continue (0, 0)] Set.empty Map.empty
+  $ Progress 0 maze [continue (0, 0)] Set.empty Map.empty Map.empty
   where continue c = Continue c (uncurry mxGetElem c maze) 0 True (0, 0) 0
 
 --
@@ -336,5 +355,5 @@ main = do
   solveds <- pure . solve $ input
 
   -- mapM_ (putStrLn . printRot . computeRotations input) $ solveds
-  mapM_ (putStrLn . render) $ solveds
-  -- mapM_ (const (pure ()) . render) $ solveds
+  -- mapM_ (putStrLn . render) $ solveds
+  seq solveds (pure ())
