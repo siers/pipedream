@@ -6,7 +6,7 @@ module Main where
 import Control.Monad (join, mplus)
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
-import Data.List (sort, sortOn, elemIndex, find, (\\))
+import Data.List (sort, sortOn, elemIndex, find)
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
 import Data.Maybe (fromMaybe, fromJust)
@@ -72,16 +72,7 @@ matrixSize m = nrows m * ncols m
 matrixBounded :: Matrix a -> Cursor -> Bool
 matrixBounded m (x, y) = x >= 0 && y >= 0 && ncols m > x && nrows m > y
 
-matrixBoundaryIndices :: Matrix a -> [(Int, Int)]
-matrixBoundaryIndices m = join . Mx.toList . Mx.matrix (nrows m) (ncols m) $ \(y, x) ->
-  if x == 1 || y == 1 || x == ncols m || y == ncols m
-  then [(x - 1, y - 1)]
-  else []
-
 to0Cursor (y, x) = (x - 1, y - 1)
-
-matrixIndices :: Matrix a -> [Cursor]
-matrixIndices m = Mx.toList $ Mx.matrix (nrows m) (ncols m) to0Cursor
 
 mxGetElem :: Int -> Int -> Matrix a -> a
 mxGetElem x y m = Mx.getElem (y + 1) (x + 1) m
@@ -186,21 +177,12 @@ rotateDir :: Int -> Direction -> Direction
 rotateDir n = (`mod` 4) . (+ n)
 
 flipDir = rotateDir 2
-flipPix = (directions \\)
 
 rotate :: Rotation -> Pix -> Pix
 rotate r = map (rotateDir r)
 
 rotateChar :: Rotation -> Char -> Char
 rotateChar r = toChar . rotate r . toPix
-
-verifyPixelModel :: Bool
-verifyPixelModel = (pixs ==) . last $
-  [ map (toPix . toChar . rotate 1) pixs
-  , map (toPix . toChar . rotate 1 . rotate 1) pixs
-  , map (toPix . toChar . rotate 1 . rotate 1 . rotate 1) pixs
-  , map (toPix . toChar . rotate 1 . rotate 1 . rotate 1 . rotate 1) pixs
-  ]
 
 cursorDelta :: Cursor -> Direction -> Cursor
 cursorDelta (x, y) 0 = (x, y - 1)
@@ -242,7 +224,7 @@ pixValidRotations maze solveds cur =
         where
           bounded = matrixBounded maze curDelta
           curDelta = cursorDelta cur d
-          char = if bounded then uncurry mxGetElem curDelta maze else ' '
+          char = if bounded then mxGetElem' curDelta maze else ' '
 
 cursorToContinue :: Maze -> Solveds -> Pix -> PartId -> (Cursor, Direction) -> Continue
 cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotations maze c) direct origin' 0
