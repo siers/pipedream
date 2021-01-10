@@ -31,7 +31,6 @@ type Rotation = Int
 type PartId = Cursor
 type PartEquiv = Map PartId PartId
 type Solveds = Map Cursor PartId
-type CursorSet = Set Cursor
 
 -- (# valid rotations, cursor, value, directly pointed)
 data Continue = Continue
@@ -46,7 +45,6 @@ data Progress = Progress
   { iter :: Int
   , maze :: Maze
   , continues :: [Continue]
-  , continuesSet :: CursorSet -- cached continues cursors
   , solveds :: Solveds
   , partEquiv :: PartEquiv } -- partition equivalence (if b connects to a, then add (b, a) to map)
 
@@ -275,23 +273,17 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
     percentage = (fromIntegral $ Map.size solveds) / (fromIntegral $ matrixSize maze)
     solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    -- traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
-    -- traceStr = show iter ++ "\n" ++ renderWithPositions positions maze
     traceStr = clear ++ renderWithPositions solveds partEquiv positions maze
     -- traceStr = renderWithPositions solveds partEquiv positions maze
     -- traceStr = clear ++ render maze -- cheap
-    contFast = map cursor . filter ((== 1) . choices) $ continues
-    contSlow = map cursor . filter ((>= 2) . choices) $ continues
     positions =
       [ ("31", Set.singleton cur) -- red
       , ("34", Set.fromList $ map cursor continues) -- green
-      -- , ("34", Set.fromList contFast) -- green
-      -- , ("32", Set.fromList contSlow) -- magenta
       ]
 
 solveRotation :: Progress -> Continue -> Solution
 solveRotation
-  Progress{iter, maze, continues, solveds, continuesSet, partEquiv}
+  Progress{iter, maze, continues, solveds, partEquiv}
   Continue{cursor=cur, cchar=this, created, origin} =
     if dead
       then Right []
@@ -302,11 +294,10 @@ solveRotation
 
   where
     progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues' }
-    progressRaw = Progress (iter + 1) maze continues' continuesSet' solveds partEquiv'
+    progressRaw = Progress (iter + 1) maze continues' solveds partEquiv'
 
     dropBad = dropWhile ((`Map.member` solveds) . cursor)
     continues' = (next ++ continues)
-    continuesSet' = (continuesSet `Set.union` Set.fromList (map cursor next)) Set.\\ (Map.keysSet solveds)
 
     next :: [Continue]
     next =
@@ -332,7 +323,7 @@ solveRotation
 
 solve' :: Progress -> Solution
 solve' Progress{continues=[]} = Right []
-solve' progress@Progress{maze=maze, continues=(continue: continues), solveds=solveds, continuesSet} =
+solve' progress@Progress{maze=maze, continues=(continue: continues), solveds=solveds} =
   fmap join . traverse (solveRotation' . flip rotateChar (cchar continue)) $
     pixValidRotations maze solveds (cursor continue)
   where
@@ -347,7 +338,7 @@ solve' progress@Progress{maze=maze, continues=(continue: continues), solveds=sol
 solve :: Maze -> [Maze]
 solve maze =
   fromLeft [] . mapLeft pure . solve'
-  $ Progress 0 maze [continue (0, 0)] Set.empty Map.empty Map.empty
+  $ Progress 0 maze [continue (0, 0)] Map.empty Map.empty
   where continue c = Continue c (uncurry mxGetElem c maze) 0 True (0, 0) 0
 
 --
