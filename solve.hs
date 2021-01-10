@@ -220,15 +220,10 @@ withinRadius r cur = r * r > x * x + y * y
 
 pixValid :: (Char, Char, Rotation, Direction) -> Bool
 pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
-    where
-      satisfied :: Pix -> Pix -> Bool
-      satisfied = (==) `on` filter (flipDir direction ==)
-
-      thisRequires :: Pix
-      thisRequires = (rotation + 2) `rotate` toPix this
-
-      thatRequires :: Pix
-      thatRequires = if that == ' ' then [] else toPix that
+  where
+    satisfied = (==) `on` filter (flipDir direction ==) :: Pix -> Pix -> Bool
+    thisRequires = (rotation + 2) `rotate` toPix this :: Pix
+    thatRequires = if that == ' ' then [] else toPix that :: Pix
 
 pixValidRotations :: Maze -> Solveds -> Cursor -> Pix
 pixValidRotations maze solveds cur =
