@@ -2,6 +2,7 @@
 
 module Main where
 
+-- solver
 import Control.Monad (join, mplus)
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
@@ -17,6 +18,14 @@ import qualified Data.Matrix as Mx
 import qualified Data.Set as Set
 import Text.Printf (printf)
 
+-- IO
+import Data.Text (Text)
+import Network.Socket (withSocketsDo)
+import qualified Data.Text as T
+import qualified Network.WebSockets as WS
+import System.Environment
+import Data.Foldable (traverse_)
+
 t a = trace (show a) a
 
 type Direction = Int -- top 0, right 1, bottom 2, left 3
@@ -24,7 +33,6 @@ type Pix = [Direction]
 type Maze = Matrix Char
 
 type Cursor = (Int, Int)
-type CursorRot = (Int, Int, Int)
 type Rotation = Int
 
 -- PartId distinguishes the connected graphs (partitions) by their smallest cursor (by def. ascending order)
@@ -263,12 +271,11 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
   tracer iter progress
   where
     tracer iter -- reorder/comment out clauses to disable tracing
+      | True = id
       | Map.size solveds == matrixSize maze - 1 = trace traceStr
-      --  | True = id
       --  | True = trace traceStr
       | iter `mod` 50 == 0 = trace traceStr
       | iter `mod` 50 == 0 = trace solvedStr
-      | True = id
 
     percentage = (fromIntegral $ Map.size solveds) / (fromIntegral $ matrixSize maze)
     solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
@@ -343,26 +350,44 @@ solve maze =
 
 --
 
-printRot :: [CursorRot] -> String
-printRot =
-  unlines
-  . map (\(x, y) -> "rotate " ++ show x ++ " " ++ show y)
-  . (>>= (\(x, y, r) -> take r (repeat (x, y))))
-  . reverse
-
-computeRotations :: Maze -> Maze -> [CursorRot]
-computeRotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input) $ cursorRot . to0Cursor
+rotateStr :: Maze -> Maze -> Text
+rotateStr = (concatenate .) . rotations
   where
-    cursorRot (x, y) = (x, y, get input `rotations` get solved)
+    concatenate :: [(Rotation, Cursor)] -> Text
+    concatenate =
+      (T.pack "rotate " <>)
+      . T.intercalate (T.pack "\n")
+      . map (\(x, y) -> T.pack $ show x ++ " " ++ show y)
+      . (>>= (\(r, (x, y)) -> take r (repeat (x, y))))
+
+    rotations :: Maze -> Maze -> [(Rotation, Cursor)]
+    rotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input) $ (cursorRot >>= (,)) . to0Cursor
       where
-        get = mxGetElem x y
+        cursorRot cur = (rotations `on` mxGetElem' cur) input solved
         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
+
+pļāpātArWebsocketu :: WS.ClientApp ()
+pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
+  where
+    send = WS.sendTextData conn
+    recv = T.unpack <$> WS.receiveData conn
+
+    solveLevel level = do
+      send (T.pack $ "new " ++ show level)
+      recv
+
+      send (T.pack "map")
+      maze <- parse . T.unpack . T.drop 5 <$> WS.receiveData conn
+      send (rotateStr maze (head $ solve maze))
+      recv
+
+      send (T.pack "verify")
+      putStrLn =<< recv
 
 main :: IO ()
 main = do
-  input <- parse <$> getContents
-  solveds <- pure . solve $ input
+  websocket <- (== "1") . fromMaybe "0" . lookup "websocket" <$> getEnvironment
 
-  -- mapM_ (putStrLn . printRot . computeRotations input) $ solveds
-  -- mapM_ (putStrLn . render) $ solveds
-  seq solveds (pure ())
+  if websocket
+  then withSocketsDo $ WS.runClient "maze.server.host" 80 "/game-pipes/" pļāpātArWebsocketu
+  else (`seq` (pure ())) . solve . parse =<< getContents
