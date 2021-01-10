@@ -52,6 +52,10 @@ data Progress = Progress
 
 type Solution = Either Maze [Progress]
 
+instance Show Continue where
+  show Continue{cursor, direct} =
+    "Cursor " ++ show cursor ++ if direct then "d" else "u"
+
 instance Show Progress where
   show ps@Progress{iter, continues} =
     "Progress" ++ show (iter, length continues)
@@ -260,7 +264,7 @@ traceBoard progress@Progress{continues=[]} = progress
 traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: continues), solveds, partEquiv} =
   tracer iter progress
   where
-    tracer iter -- reorder clauses to disable tracing
+    tracer iter -- reorder/comment out clauses to disable tracing
       | Map.size solveds == matrixSize maze - 1 = trace traceStr
       --  | True = id
       --  | True = trace traceStr
@@ -274,23 +278,27 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
     -- traceStr = show progress ++ "\n" ++ renderWithPositions positions maze
     -- traceStr = show iter ++ "\n" ++ renderWithPositions positions maze
     traceStr = clear ++ renderWithPositions solveds partEquiv positions maze
-    -- traceStr = renderWithPositions positions maze
+    -- traceStr = renderWithPositions solveds partEquiv positions maze
     -- traceStr = clear ++ render maze -- cheap
     contFast = map cursor . filter ((== 1) . choices) $ continues
     contSlow = map cursor . filter ((>= 2) . choices) $ continues
     positions =
-      [ ("33", Set.singleton cur) -- yellow
-      , ("34", Set.fromList contFast) -- green
-      , ("32", Set.fromList contSlow) -- magenta
+      [ ("31", Set.singleton cur) -- red
+      , ("34", Set.fromList $ map cursor continues) -- green
+      -- , ("34", Set.fromList contFast) -- green
+      -- , ("32", Set.fromList contSlow) -- magenta
       ]
 
 solveRotation :: Progress -> Continue -> Solution
 solveRotation
-  Progress{iter, maze=maze, continues, solveds=solveds, continuesSet, partEquiv}
+  Progress{iter, maze, continues, solveds, continuesSet, partEquiv}
   Continue{cursor=cur, cchar=this, created, origin} =
-    if Map.size solveds == matrixSize maze
-    then Left maze
-    else solve' . traceBoard $ progress
+    if dead
+      then Right []
+      else
+        if Map.size solveds == matrixSize maze
+        then Left maze
+        else solve' . traceBoard $ progress
 
   where
     progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues' }
@@ -308,7 +316,16 @@ solveRotation
       . filter (not . (`Map.member` solveds) . fst)
       $ cursorDeltasSafe maze cur directions
 
-    neighbours = map (lookupConverge partEquiv . fst) $ cursorDeltasSafe maze cur (toPix this)
+    partEquate = lookupConverge partEquiv
+
+    -- if null directed, then neighbours = [], so partEquiv = partEquiv'
+    dead = null directed && not connected && null hope
+      where
+        directed = dropBad $ filter (\c -> direct c) next
+        connected = (0, 0) == partEquate cur
+        hope = dropBad $ filter ((partEquate cur ==) . partEquate . cursor) continues
+
+    neighbours = map (partEquate . fst) $ cursorDeltasSafe maze cur (toPix this)
     (origin':neighbours') = sort $ neighbours ++ [origin]
 
     partEquiv' = foldr (uncurry Map.insert) partEquiv $ (, origin') <$> neighbours'
