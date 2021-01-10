@@ -16,7 +16,7 @@ import Debug.Trace
 import qualified Data.Map as Map
 import qualified Data.Matrix as Mx
 import qualified Data.Set as Set
-import Text.Printf
+import Text.Printf (printf)
 
 t a = trace (show a) a
 
@@ -146,8 +146,8 @@ charMap = Map.fromList charMapEntries
 pixMap :: Map Pix Char
 pixMap = Map.fromList $ map swap charMapEntries
 
-mapChar = (charMap !)
-mapPix = (pixMap !) . sort
+toPix = (charMap !)
+toChar = (pixMap !) . sort
 
 parse :: String -> Maze
 parse =
@@ -184,14 +184,14 @@ rotate :: Rotation -> Pix -> Pix
 rotate r = map (rotateDir r)
 
 rotateChar :: Rotation -> Char -> Char
-rotateChar r = mapPix . rotate r . mapChar
+rotateChar r = toChar . rotate r . toPix
 
 verifyPixelModel :: Bool
 verifyPixelModel = (pixs ==) . last $
-  [ map (mapChar . mapPix . rotate 1) pixs
-  , map (mapChar . mapPix . rotate 1 . rotate 1) pixs
-  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1) pixs
-  , map (mapChar . mapPix . rotate 1 . rotate 1 . rotate 1 . rotate 1) pixs
+  [ map (toPix . toChar . rotate 1) pixs
+  , map (toPix . toChar . rotate 1 . rotate 1) pixs
+  , map (toPix . toChar . rotate 1 . rotate 1 . rotate 1) pixs
+  , map (toPix . toChar . rotate 1 . rotate 1 . rotate 1 . rotate 1) pixs
   ]
 
 cursorDelta :: Cursor -> Direction -> Cursor
@@ -225,10 +225,10 @@ pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
       satisfied = (==) `on` filter (flipDir direction ==)
 
       thisRequires :: Pix
-      thisRequires = (rotation + 2) `rotate` mapChar this
+      thisRequires = (rotation + 2) `rotate` toPix this
 
       thatRequires :: Pix
-      thatRequires = if that == ' ' then [] else mapChar that
+      thatRequires = if that == ' ' then [] else toPix that
 
 pixValidRotations :: Maze -> Solveds -> Cursor -> Pix
 pixValidRotations maze solveds cur =
@@ -321,7 +321,7 @@ solveRotation
     next =
       filter (\Continue{choices=c, direct=d} -> c < 2 || d)
       . map (\c -> c { created = created + 1 })
-      . map (cursorToContinue maze solveds (mapChar rotated) origin)
+      . map (cursorToContinue maze solveds (toPix rotated) origin)
       . filter (not . (`Map.member` solveds) . fst)
       $ cursorDeltasSafe maze cur directions
 
