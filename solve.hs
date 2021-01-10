@@ -163,8 +163,9 @@ renderWithPositions solveds partEquiv coloredSets maze =
   . Mx.mapPos (\cur1 c -> fmt (to0Cursor cur1) (c : []))
   $ maze
   where
-    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) :: Int -> String
-    colorPart cur = color256 . (\(x, y) -> x * 67 + y * 23) . lookupConverge partEquiv <$> Map.lookup cur solveds
+    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash :: Cursor -> String
+    colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
+    colorPart cur = color256 . lookupConverge partEquiv <$> Map.lookup cur solveds
     colorSet cur = printf "\x1b[%sm" . fst <$> find (Set.member cur . snd) coloredSets
     color cur = colorPart cur `mplus` colorSet cur
 
