@@ -2,14 +2,13 @@
 
 module Main where
 
-import Control.Monad (join, foldM, mplus)
-import Data.Bifunctor
+import Control.Monad (join, mplus)
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
-import Data.List (sort, sortOn, elemIndex, uncons, find, (\\))
+import Data.List (sort, sortOn, elemIndex, find, (\\))
 import Data.Map (Map, (!))
 import Data.Matrix as Mx (Matrix, ncols, nrows)
-import Data.Maybe (fromMaybe, fromJust, listToMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import Data.Set (Set)
 import Data.Tuple (swap)
 import Debug.Trace
@@ -79,21 +78,6 @@ mxGetElem' = uncurry mxGetElem
 
 mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
 mxSetElem v (x, y) m = Mx.setElem v (y + 1, x + 1) m
-
-unconsMay :: [a] -> (Maybe a, [a])
-unconsMay a = (listToMaybe a, drop 1 a)
-
-unconsList :: [a] -> ([a], [a])
-unconsList = fromMaybe (([], [])) . fmap (bimap return id) . uncons
-
-matrixCopy :: (Cursor -> Bool) -> Matrix a -> Matrix a -> Matrix a
-matrixCopy match dst src = flip Mx.mapPos dst $ \(y, x) a ->
-  if match (x - 1, y - 1)
-  then mxGetElem (x - 1) (y - 1) src
-  else a
-
-foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
-foldM1 f = uncurry (foldM f) . fromJust . uncons
 
 --
 
@@ -201,20 +185,9 @@ cursorDelta (x, y) 2 = (x, y + 1)
 cursorDelta (x, y) 3 = (x - 1, y)
 cursorDelta _ _      = error "only defined for 4 directions"
 
-cursorDeltaSafe :: Matrix a -> Cursor -> Direction -> [Cursor]
-cursorDeltaSafe maze c d = matrixBounded maze `filter` [cursorDelta c d]
-
 -- just to be able to switch quickly to see if it's better
 cursorDeltasSafe :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
-
-cursorShrink :: Int -> Cursor -> Cursor
-cursorShrink scale (x, y) = (max 0 $ x `div` scale, max 0 $ y `div` scale)
-
-withinRadius :: Double -> Cursor -> Bool
-withinRadius r cur = r * r > x * x + y * y
-  where (x, y) = bimap fromIntegral fromIntegral cur
-  -- Mx.matrix 20 20 (withinRadius 5 . to0Cursor)
 
 --
 
