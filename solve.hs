@@ -301,48 +301,47 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
       , ("32", Set.fromList contSlow) -- magenta
       ]
 
-solve' :: Int -> Progress -> Solution
-solve' _ Progress{continues=[]} = Right []
-solve' lifespan progress'@Progress{maze=maze', continues=(Continue{cursor=cur, cchar=this, created, origin}: continues'), solveds=solveds', continuesSet} =
-  iterGuard $ do
-    fmap join . traverse (solveRotation . flip rotateChar this) $
-      pixValidRotations maze' solveds' cur
+solveRotation :: Progress -> Continue -> Solution
+solveRotation
+  Progress{iter, maze=maze, continues, solveds=solveds, continuesSet}
+  Continue{cursor=cur, cchar=rotated, created, origin} =
+    if Map.size solveds == matrixSize maze
+    then Left maze
+    else solve' . traceBoard $ progress
 
   where
-    iterGuard compute =
-      if lifespan == 0
-      then Right [progress']
-      else compute
+    progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues' }
+    progressRaw = Progress (iter + 1) maze continues' continuesSet' solveds
 
-    solveRotation :: Char -> Solution
-    solveRotation rotated =
-      if Map.size solveds == matrixSize maze
-      then Left maze
-      else
-        solve' (lifespan - 1) . traceBoard $ progress
+    dropBad = dropWhile ((`Map.member` solveds) . cursor)
+    continues' = (next ++ continues)
+    continuesSet' = (continuesSet `Set.union` Set.fromList (map cursor next)) Set.\\ (Map.keysSet solveds)
 
-      where
-        progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues }
-        progressRaw = Progress (iter progress' + 1) maze continues continuesSetNext solveds
+    next :: [Continue]
+    next =
+      filter (\Continue{choices=c, direct=d} -> c < 2 || d)
+      . map (\c -> c { created = created + 1 })
+      . map (cursorToContinue maze solveds (mapChar rotated) origin)
+      . filter (not . (`Map.member` solveds) . fst)
+      $ cursorDeltasSafe maze cur directions
 
-        maze = mxSetElem rotated cur maze'
-
-        dropBad = dropWhile ((`Map.member` solveds) . cursor)
-        continues = (next ++ continues')
-        continuesSetNext = (continuesSet `Set.union` Set.fromList (map cursor next)) Set.\\ (Map.keysSet solveds)
-        solveds = Map.insert cur origin solveds'
-
-        next :: [Continue]
-        next =
-          filter (\Continue{choices=c, direct=d} -> c < 2 || d)
-          . map (\c -> c { created = created + 1 })
-          . map (cursorToContinue maze solveds (mapChar rotated) origin)
-          . filter (not . (`Map.member` solveds) . fst)
-          $ cursorDeltasSafe maze cur directions
+solve' :: Progress -> Solution
+solve' Progress{continues=[]} = Right []
+solve' progress@Progress{maze=maze, continues=(continue: continues), solveds=solveds, continuesSet} =
+  fmap join . traverse (solveRotation' . flip rotateChar (cchar continue)) $
+    pixValidRotations maze solveds (cursor continue)
+  where
+    solveRotation' rotated =
+      solveRotation
+        (progress
+          { continues = continues
+          , solveds = Map.insert (cursor continue) (origin continue) solveds
+          , maze = mxSetElem rotated (cursor continue) maze })
+        continue { cchar = rotated }
 
 solve :: Maze -> [Maze]
 solve maze =
-  fromLeft [] . mapLeft pure . solve' (-1)
+  fromLeft [] . mapLeft pure . solve'
   $ Progress 0 maze [continue (0, 0)] Set.empty Map.empty
   where continue c = Continue c (uncurry mxGetElem c maze) 0 True (0, 0) 0
 
