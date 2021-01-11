@@ -289,30 +289,31 @@ solveRotation
         else solve' . traceBoard $ progress
 
   where
-    progress = progressRaw { continues = dropBad $ sortContinues progressRaw continues' }
-    progressRaw = Progress (iter + 1) maze continues' solveds partEquiv'
-
-    dropBad = dropWhile ((`Map.member` solveds) . cursor)
-    continues' = next ++ continues
-
-    next :: [Continue]
-    next =
-      map (\c -> c { created = created + 1 })
-      . map (cursorToContinue maze solveds (toPix this) origin')
-      . filter (not . (`Map.member` solveds) . fst)
-      $ cursorDeltasSafe maze cur directions
-
+    deltas = cursorDeltasSafe maze cur
+    dropBadCur = dropWhile (`Map.member` solveds)
+    dropBadCont = dropWhile ((`Map.member` solveds) . cursor)
     partEquate = lookupConverge partEquiv
 
     dead = null directed && null hope
       where
-        directed = dropBad $ filter (\c -> direct c) next
-        hope = dropBad $ filter ((partEquate cur ==) . partEquate . cursor) continues
+        directed = dropBadCur . map fst $ deltas (toPix this)
+        hope = dropBadCont $ filter ((partEquate cur ==) . partEquate . cursor) continues
 
-    neighbours = map (partEquate . fst) $ cursorDeltasSafe maze cur (toPix this)
+    next :: [Continue]
+    next =
+      map (\c -> c { created = created + 1 })
+       . map (cursorToContinue maze solveds (toPix this) origin')
+       . filter (not . (`Map.member` solveds) . fst)
+       $ deltas directions
+
+    neighbours = (partEquate . fst) `map` deltas (toPix this)
     (origin':neighbours') = sort $ neighbours ++ [origin]
-
     partEquiv' = foldr (uncurry Map.insert) partEquiv $ (, origin') <$> neighbours'
+
+    continues' = next ++ continues
+
+    progressRaw = Progress (iter + 1) maze continues' solveds partEquiv'
+    progress = progressRaw { continues = dropBadCont $ sortContinues progressRaw continues' }
 
 solve' :: Progress -> Solution
 solve' Progress{continues=[]} = Right []
