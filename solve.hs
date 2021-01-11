@@ -167,8 +167,10 @@ renderWithPositions solveds partEquiv coloredSets maze =
     color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash :: Cursor -> String
     colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
     colorPart cur = color256 . lookupConverge partEquiv . snd <$> Map.lookup cur solveds
+
     colorSet cur = printf "\x1b[%sm" . fst <$> find (Set.member cur . snd) coloredSets
-    color cur = colorPart cur `mplus` colorSet cur
+
+    color cur = colorSet cur `mplus` colorPart cur
     fmt cur s = printf $ fromMaybe s . fmap (\c -> printf "%s%s\x1b[39m" c s) $ color cur
 
 -- C: n=1, CW: n=-1
@@ -250,7 +252,7 @@ sortContinues p cs = sortOn depth cs
     -- depth c = created c
     -- depth c = (\(x, y) -> x + y) $ cursor c
     depth c = created c + (choices c) * 5
-    -- depth c = created c + (choices c) * 100
+    -- depth c = created c + (choices c) * 5 -- + (if direct c then 1 else 0)
 
 --
 
@@ -275,7 +277,7 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
     -- traceStr = clear ++ render maze -- cheap
     positions =
       [ ("31", Set.singleton cur) -- red
-      , ("34", Set.fromList $ map cursor continues) -- green
+      , ("31", Set.fromList $ map cursor continues) -- green
       ]
 
 solveRotation :: Progress -> Continue -> Solution
@@ -298,8 +300,7 @@ solveRotation
 
     next :: [Continue]
     next =
-      filter (\Continue{choices=c, direct=d} -> c < 2 || d)
-      . map (\c -> c { created = created + 1 })
+      map (\c -> c { created = created + 1 })
       . map (cursorToContinue maze solveds (toPix this) origin')
       . filter (not . (`Map.member` solveds) . fst)
       $ cursorDeltasSafe maze cur directions
