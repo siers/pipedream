@@ -259,15 +259,16 @@ traceBoard progress@Progress{continues=[]} = progress
 traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: continues), solveds, partEquiv} =
   tracer iter progress
   where
+    freq = (matrixSize maze) `div` 10
     tracer iter -- reorder/comment out clauses to disable tracing
-      | True = id
       | Map.size solveds == matrixSize maze - 1 = trace traceStr
       --  | True = trace traceStr
-      | iter `mod` 50 == 0 = trace traceStr
-      | iter `mod` 50 == 0 = trace solvedStr
+      | iter `mod` freq == 0 = trace traceStr
+      | iter `mod` freq == 0 = trace solvedStr
+      | True = id
 
     percentage = (fromIntegral $ Map.size solveds) / (fromIntegral $ matrixSize maze)
-    solvedStr = ("\x1b[2Ksolved: " ++ show percentage ++ "%" ++ "\x1b[1A")
+    solvedStr = ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     traceStr = clear ++ renderWithPositions solveds partEquiv positions maze
     -- traceStr = renderWithPositions solveds partEquiv positions maze
