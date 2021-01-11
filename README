@@ -5,10 +5,18 @@ notes      scratchpad
 running
   nix-shell shell.nix --run 'ghc solve.hs && ./solve < samples/2'
 
-running with profiler
-  ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve +RTS -p < samples/3
+running with websocket
+  websocket=1 ./solve
 
-to generate rotations uncomment the according line in main
+running with profiler
+  ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve < samples/3
+
+to enable/disable progress info, fiddle with code in traceBoard
+
+fun things to do for visualizations:
+  remove coloring by equivalent parts in renderWithPositions
+  screw with the score variable in sortContinues
+  increase the frequency to see more intermediate steps
 
 ┏╸╺┓┏━╸╻┏━━╸╺┳╸╻╻╻╻╺┳╸┏━┓
 ┗┳┳┻┻╸╻┣╋╸╻╻╺┫┏┫┃┣┫╻┗┳┻┓╹
