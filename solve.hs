@@ -290,10 +290,11 @@ solveRotation
     dropBadCur = dropWhile (`Map.member` solveds)
     dropBadCont = dropWhile ((`Map.member` solveds) . cursor)
     partEquate = lookupConverge partEquiv
-    friends cur = length . dropBadCont $ filter ((partEquate cur ==) . partEquate . cursor) continues
 
-    dead = null directed && friends cur == 0
-      where directed = dropBadCur . map fst $ deltas (toPix this)
+    dead = null directed && friendly continues
+      where
+        directed = dropBadCur . map fst $ deltas (toPix this)
+        friendly = not . any (\c -> not (cursor c `Map.member` solveds) && partEquate cur == partEquate (cursor c))
 
     neighbours = (partEquate . fst) `map` deltas (toPix this)
     (origin':neighbours') = sort $ neighbours ++ [origin]
