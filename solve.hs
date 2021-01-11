@@ -38,7 +38,7 @@ type Rotation = Int
 -- PartId distinguishes the connected graphs (partitions) by their smallest cursor (by def. ascending order)
 type PartId = Cursor
 type PartEquiv = Map PartId PartId
-type Solveds = Map Cursor PartId
+type Solveds = Map Cursor (Char, PartId)
 
 -- (# valid rotations, cursor, value, directly pointed)
 data Continue = Continue
@@ -161,15 +161,14 @@ renderWithPositions solveds partEquiv coloredSets maze =
   unlines
   . map concat
   . Mx.toLists
-  . Mx.mapPos (\cur1 c -> fmt (to0Cursor cur1) (c : []))
+  . Mx.mapPos (\cur1 c -> fmt (to0Cursor cur1) ((getMazeElem maze solveds (to0Cursor cur1)) : []))
   $ maze
   where
     color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash :: Cursor -> String
     colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
-    colorPart cur = color256 . lookupConverge partEquiv <$> Map.lookup cur solveds
+    colorPart cur = color256 . lookupConverge partEquiv . snd <$> Map.lookup cur solveds
     colorSet cur = printf "\x1b[%sm" . fst <$> find (Set.member cur . snd) coloredSets
     color cur = colorPart cur `mplus` colorSet cur
-
     fmt cur s = printf $ fromMaybe s . fmap (\c -> printf "%s%s\x1b[39m" c s) $ color cur
 
 -- C: n=1, CW: n=-1
@@ -195,7 +194,15 @@ cursorDelta _ _      = error "only defined for 4 directions"
 cursorDeltasSafe :: Matrix a -> Cursor -> Pix -> [(Cursor, Direction)]
 cursorDeltasSafe m c p = filter (matrixBounded m . fst) $ (cursorDelta c >>= (,)) `map` p
 
+
 --
+
+-- get diff from Solveds otherwise from Maze
+getMazeElem :: Maze -> Solveds -> Cursor -> Char
+getMazeElem maze solveds cur = mxGetElem' cur maze `fromMaybe` (fst <$> Map.lookup cur solveds)
+
+setMazeElems :: Maze -> Solveds -> Maze
+setMazeElems maze solveds = Mx.mapPos ((getMazeElem maze solveds . ) . (const . to0Cursor)) maze
 
 pixValid :: (Char, Char, Rotation, Direction) -> Bool
 pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
@@ -208,7 +215,7 @@ pixValidRotations :: Maze -> Solveds -> Cursor -> Pix
 pixValidRotations maze solveds cur =
   (\r -> all (checkDirection r) directions) `filter` chooseRotation this
   where
-    this = mxGetElem' cur maze :: Char
+    this = getMazeElem maze solveds cur
 
     chooseRotation :: Char -> Pix
     chooseRotation '╋' = [0]
@@ -224,12 +231,12 @@ pixValidRotations maze solveds cur =
         where
           bounded = matrixBounded maze curDelta
           curDelta = cursorDelta cur d
-          char = if bounded then mxGetElem' curDelta maze else ' '
+          char = if bounded then getMazeElem maze solveds curDelta else ' '
 
 cursorToContinue :: Maze -> Solveds -> Pix -> PartId -> (Cursor, Direction) -> Continue
 cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotations maze c) direct origin' 0
   where
-    char = mxGetElem x y maze
+    char = getMazeElem maze solveds c
     direct = o `elem` pix
     origin' = if direct then origin else c
 
@@ -278,7 +285,7 @@ solveRotation
       then Right []
       else
         if Map.size solveds == matrixSize maze
-        then Left maze
+        then Left (setMazeElems maze solveds)
         else solve' . traceBoard $ progress
 
   where
@@ -318,10 +325,10 @@ solve' progress@Progress{maze=maze, continues=(continue: continues), solveds=sol
   where
     solveRotation' rotated =
       solveRotation
-        (progress
+        progress
           { continues = continues
-          , solveds = Map.insert (cursor continue) (origin continue) solveds
-          , maze = mxSetElem rotated (cursor continue) maze })
+          , solveds = Map.insert (cursor continue) (rotated, origin continue) solveds
+          }
         continue { cchar = rotated }
 
 solve :: Maze -> [Maze]

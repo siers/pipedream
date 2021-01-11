@@ -192,6 +192,8 @@ $ ghc -prof -fprof-auto -rtsopts solve && ./solve +RTS -p < samples/3
 
 $ ghc solve.hs -rtsopts -with-rtsopts='-M1024m' && ./solve < samples/3
 
+% ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve < samples/2
+
 % ghc solve.hs -prof -with-rtsopts='-xc' && time ./solve < samples/1
 
 % ghc solve.hs -threaded -with-rtsopts='-N8' && time ./solve < ./samples/3
