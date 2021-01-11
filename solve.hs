@@ -282,11 +282,11 @@ solveRotation :: Progress -> Continue -> Solution
 solveRotation
   Progress{iter, maze, continues, solveds, partEquiv}
   Continue{cursor=cur, cchar=this, created, origin} =
-    if dead
-      then Right []
-      else
-        if Map.size solveds == matrixSize maze
-        then Left (setMazeElems maze solveds)
+    if Map.size solveds == matrixSize maze
+    then Left (setMazeElems maze solveds)
+    else
+      if dead
+        then Right []
         else solve' . traceBoard $ progress
 
   where
@@ -306,11 +306,9 @@ solveRotation
 
     partEquate = lookupConverge partEquiv
 
-    -- if null directed, then neighbours = [], so partEquiv = partEquiv'
-    dead = null directed && not connected && null hope
+    dead = null directed && null hope
       where
         directed = dropBad $ filter (\c -> direct c) next
-        connected = (0, 0) == partEquate cur
         hope = dropBad $ filter ((partEquate cur ==) . partEquate . cursor) continues
 
     neighbours = map (partEquate . fst) $ cursorDeltasSafe maze cur (toPix this)
