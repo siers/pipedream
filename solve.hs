@@ -245,8 +245,8 @@ cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotat
     nRotations :: Maze -> Cursor -> Int
     nRotations maze c = length $ pixValidRotations maze solveds c
 
-sortContinues :: Progress -> [Continue] -> [Continue]
-sortContinues p cs = sortOn score cs
+sortContinues :: [Continue] -> [Continue]
+sortContinues cs = sortOn score cs
   where
     score c = created c + (choices c) * 5
     -- score c = created c + (choices c) * 5 -- + (if direct c then 1 else 0)
@@ -299,6 +299,10 @@ solveRotation
         directed = dropBadCur . map fst $ deltas (toPix this)
         hope = dropBadCont $ filter ((partEquate cur ==) . partEquate . cursor) continues
 
+    neighbours = (partEquate . fst) `map` deltas (toPix this)
+    (origin':neighbours') = sort $ neighbours ++ [origin]
+    partEquiv' = foldr (uncurry Map.insert) partEquiv $ (, origin') <$> neighbours'
+
     next :: [Continue]
     next =
       map (\c -> c { created = created + 1 })
@@ -306,14 +310,8 @@ solveRotation
        . filter (not . (`Map.member` solveds) . fst)
        $ deltas directions
 
-    neighbours = (partEquate . fst) `map` deltas (toPix this)
-    (origin':neighbours') = sort $ neighbours ++ [origin]
-    partEquiv' = foldr (uncurry Map.insert) partEquiv $ (, origin') <$> neighbours'
-
-    continues' = next ++ continues
-
-    progressRaw = Progress (iter + 1) maze continues' solveds partEquiv'
-    progress = progressRaw { continues = dropBadCont $ sortContinues progressRaw continues' }
+    continues' = dropBadCont . sortContinues $ next ++ continues
+    progress = Progress (iter + 1) maze continues' solveds partEquiv'
 
 solve' :: Progress -> Solution
 solve' Progress{continues=[]} = Right []
