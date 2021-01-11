@@ -249,6 +249,7 @@ sortContinues :: [Continue] -> [Continue]
 sortContinues cs = sortOn score cs
   where
     score c = created c + (choices c) * 5
+    -- score c = created c + (choices c) * 5 + (0 - friends c)
     -- score c = created c + (choices c) * 5 -- + (if direct c then 1 else 0)
 
 --
@@ -293,11 +294,10 @@ solveRotation
     dropBadCur = dropWhile (`Map.member` solveds)
     dropBadCont = dropWhile ((`Map.member` solveds) . cursor)
     partEquate = lookupConverge partEquiv
+    friends cur = length . dropBadCont $ filter ((partEquate cur ==) . partEquate . cursor) continues
 
-    dead = null directed && null hope
-      where
-        directed = dropBadCur . map fst $ deltas (toPix this)
-        hope = dropBadCont $ filter ((partEquate cur ==) . partEquate . cursor) continues
+    dead = null directed && friends cur == 0
+      where directed = dropBadCur . map fst $ deltas (toPix this)
 
     neighbours = (partEquate . fst) `map` deltas (toPix this)
     (origin':neighbours') = sort $ neighbours ++ [origin]
