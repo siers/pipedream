@@ -47,7 +47,8 @@ data Continue = Continue
   , choices :: Int
   , direct :: Bool
   , origin :: PartId
-  , created :: Int } deriving Eq -- created at iter
+  , created :: Int
+  , score :: Int } deriving Eq
 
 data Progress = Progress
   { iter :: Int
@@ -232,7 +233,7 @@ pixValidRotations maze solveds cur =
           char = if bounded then getMazeElem maze solveds curDelta else ' '
 
 cursorToContinue :: Maze -> Solveds -> Pix -> PartId -> (Cursor, Direction) -> Continue
-cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotations maze c) direct origin' 0
+cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotations maze c) direct origin' 0 0
   where
     char = getMazeElem maze solveds c
     direct = o `elem` pix
@@ -240,13 +241,6 @@ cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotat
 
     nRotations :: Maze -> Cursor -> Int
     nRotations maze c = length $ pixValidRotations maze solveds c
-
-sortContinues :: [Continue] -> [Continue]
-sortContinues cs = sortOn score cs
-  where
-    score c = created c + (choices c) * 5
-    -- score c = created c + (choices c) * 5 + (0 - friends c)
-    -- score c = created c + (choices c) * 5 -- + (if direct c then 1 else 0)
 
 --
 
@@ -291,9 +285,9 @@ solveRotation
     dropBadCont = dropWhile ((`Map.member` solveds) . cursor)
     partEquate = lookupConverge partEquiv
 
-    dead = null directed && friendly continues
+    dead = finished && friendly continues
       where
-        directed = dropBadCur . map fst $ deltas (toPix this)
+        finished = not . any (not . (`Map.member` solveds) . fst) $ deltas (toPix this)
         friendly = not . any (\c -> not (cursor c `Map.member` solveds) && partEquate cur == partEquate (cursor c))
 
     neighbours = (partEquate . fst) `map` deltas (toPix this)
@@ -302,12 +296,12 @@ solveRotation
 
     next :: [Continue]
     next =
-      map (\c -> c { created = created + 1 })
+      map (\c -> c { created = created + 1, score = (created + 1) + choices c * 5 })
        . map (cursorToContinue maze solveds (toPix this) origin')
        . filter (not . (`Map.member` solveds) . fst)
        $ deltas directions
 
-    continues' = dropBadCont . sortContinues $ next ++ continues
+    continues' = dropBadCont . sortOn score $ next ++ continues
     progress = Progress (iter + 1) maze continues' solveds partEquiv'
 
 solve' :: Progress -> Solution
@@ -326,7 +320,7 @@ solve :: Maze -> [Maze]
 solve maze =
   fromLeft [] . mapLeft pure . solve'
   $ Progress 0 maze [continue (0, 0)] Map.empty Map.empty
-  where continue c = Continue c (uncurry mxGetElem c maze) 0 True (0, 0) 0
+  where continue c = Continue c (uncurry mxGetElem c maze) 0 True (0, 0) 0 0
 
 --
 
