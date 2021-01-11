@@ -47,7 +47,7 @@ data Continue = Continue
   , choices :: Int
   , direct :: Bool
   , origin :: PartId
-  , created :: Int } -- created at iter
+  , created :: Int } deriving Eq -- created at iter
 
 data Progress = Progress
   { iter :: Int
@@ -246,13 +246,10 @@ cursorToContinue maze solveds pix origin (c@(x, y), o) = Continue c char (nRotat
     nRotations maze c = length $ pixValidRotations maze solveds c
 
 sortContinues :: Progress -> [Continue] -> [Continue]
-sortContinues p cs = sortOn depth cs
+sortContinues p cs = sortOn score cs
   where
-    depth :: Continue -> Int
-    -- depth c = created c
-    -- depth c = (\(x, y) -> x + y) $ cursor c
-    depth c = created c + (choices c) * 5
-    -- depth c = created c + (choices c) * 5 -- + (if direct c then 1 else 0)
+    score c = created c + (choices c) * 5
+    -- score c = created c + (choices c) * 5 -- + (if direct c then 1 else 0)
 
 --
 
@@ -263,10 +260,10 @@ traceBoard progress@Progress{iter, maze, continues=(Continue{cursor=cur}: contin
   where
     freq = (matrixSize maze) `div` 10
     tracer iter -- reorder/comment out clauses to disable tracing
-      | Map.size solveds == matrixSize maze - 1 = trace traceStr
+      --  | Map.size solveds == matrixSize maze - 1 = trace traceStr
       --  | True = trace traceStr
-      | iter `mod` freq == 0 = trace traceStr
       | iter `mod` freq == 0 = trace solvedStr
+      | iter `mod` freq == 0 = trace traceStr
       | True = id
 
     percentage = (fromIntegral $ Map.size solveds) / (fromIntegral $ matrixSize maze)
@@ -296,7 +293,7 @@ solveRotation
     progressRaw = Progress (iter + 1) maze continues' solveds partEquiv'
 
     dropBad = dropWhile ((`Map.member` solveds) . cursor)
-    continues' = (next ++ continues)
+    continues' = next ++ continues
 
     next :: [Continue]
     next =
