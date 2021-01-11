@@ -82,16 +82,12 @@ mxGetElem' = uncurry mxGetElem
 mxSetElem :: a -> (Int, Int) -> Matrix a -> Matrix a
 mxSetElem v (x, y) m = Mx.setElem v (y + 1, x + 1) m
 
-converge :: Eq a => (a -> a) -> a -> a
-converge = until =<< ((==) =<<)
-
--- stops at first cycle
+-- lookup fixed point in map, stops at first cycle
 lookupConverge :: (Ord v, Eq v, Show v) => Map v v -> v -> v
-lookupConverge m v = converge (\v' -> lookup v $ v') $ lookupDef v
+lookupConverge m v = loop' (find v)
   where
-    lookup first val = fromJust . def (Just first) . fmap lookupDef . find (/= first) $ Just val
-    lookupDef v = fromMaybe v . flip Map.lookup m $ v
-    def val = flip mplus val
+    find v = Map.findWithDefault v v m
+    loop' v' = if v' == v || find v' == v' then v' else loop' (find v')
 
 --
 
@@ -315,16 +311,14 @@ solveRotation
 
 solve' :: Progress -> Solution
 solve' Progress{continues=[]} = Right []
-solve' progress@Progress{maze=maze, continues=(continue: continues), solveds=solveds} =
+solve' progress@Progress{iter, maze, continues=(continue: continues), solveds, partEquiv} =
   fmap join . traverse (solveRotation' . flip rotateChar (cchar continue)) $
     pixValidRotations maze solveds (cursor continue)
   where
+    solveInsert = Map.insert (cursor continue) . (, origin continue)
     solveRotation' rotated =
       solveRotation
-        progress
-          { continues = continues
-          , solveds = Map.insert (cursor continue) (rotated, origin continue) solveds
-          }
+        progress { continues, solveds = solveInsert rotated $ solveds }
         continue { cchar = rotated }
 
 solve :: Maze -> [Maze]
