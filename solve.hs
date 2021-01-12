@@ -280,15 +280,14 @@ solveRotation
         else solve' . traceBoard $ progress
 
   where
+    solved = flip Map.member solveds
     deltas = cursorDeltasSafe maze cur
-    dropBadCur = dropWhile (`Map.member` solveds)
-    dropBadCont = dropWhile ((`Map.member` solveds) . cursor)
     partEquate = lookupConverge partEquiv
 
     dead = finished && friendly continues
       where
-        finished = not . any (not . (`Map.member` solveds) . fst) $ deltas (toPix this)
-        friendly = not . any (\c -> not (cursor c `Map.member` solveds) && partEquate cur == partEquate (cursor c))
+        finished = not . any (not . solved . fst) $ deltas (toPix this)
+        friendly = not . any (\c -> not (solved (cursor c)) && partEquate cur == partEquate (cursor c))
 
     neighbours = (partEquate . fst) `map` deltas (toPix this)
     (origin':neighbours') = sort $ neighbours ++ [origin]
@@ -298,10 +297,10 @@ solveRotation
     next =
       map (\c -> c { created = created + 1, score = (created + 1) + choices c * 5 })
        . map (cursorToContinue maze solveds (toPix this) origin')
-       . filter (not . (`Map.member` solveds) . fst)
+       . filter (not . solved . fst)
        $ deltas directions
 
-    continues' = dropBadCont . sortOn score $ next ++ continues
+    continues' = dropWhile (solved . cursor) . sortOn score $ next ++ continues
     progress = Progress (iter + 1) maze continues' solveds partEquiv'
 
 solve' :: Progress -> Solution
@@ -347,13 +346,12 @@ pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
     recv = T.unpack <$> WS.receiveData conn
 
     solveLevel level = do
-      send (T.pack $ "new " ++ show level)
-      recv
+      send (T.pack $ "new " ++ show level); recv
 
       send (T.pack "map")
       maze <- parse . T.unpack . T.drop 5 <$> WS.receiveData conn
-      send (rotateStr maze (head $ solve maze))
-      recv
+
+      send (rotateStr maze (head $ solve maze)); recv
 
       send (T.pack "verify")
       putStrLn =<< recv
