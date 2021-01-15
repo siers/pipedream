@@ -8,7 +8,7 @@ import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
 import Data.List (sort, sortOn, elemIndex, find)
 import Data.Map (Map, (!))
-import Data.Matrix as Mx (Matrix, ncols, nrows)
+import Data.Matrix as Mx (Matrix)
 import Data.Maybe (fromMaybe, fromJust)
 import Data.Set (Set)
 import Data.Tuple (swap)
@@ -68,10 +68,10 @@ instance Show Progress where
     "Progress" ++ show (iter, length continues)
 
 matrixSize :: Matrix a -> Int
-matrixSize m = nrows m * ncols m
+matrixSize m = Mx.nrows m * Mx.ncols m
 
 matrixBounded :: Matrix a -> Cursor -> Bool
-matrixBounded m (x, y) = x >= 0 && y >= 0 && ncols m > x && nrows m > y
+matrixBounded m (x, y) = x >= 0 && y >= 0 && Mx.ncols m > x && Mx.nrows m > y
 
 to0Cursor (y, x) = (x - 1, y - 1)
 
@@ -334,7 +334,7 @@ rotateStr = (concatenate .) . rotations
       . (>>= (\(r, (x, y)) -> take r (repeat (x, y))))
 
     rotations :: Maze -> Maze -> [(Rotation, Cursor)]
-    rotations input solved = Mx.toList . Mx.matrix (nrows input) (ncols input) $ (cursorRot >>= (,)) . to0Cursor
+    rotations input solved = Mx.toList . Mx.matrix (Mx.nrows input) (Mx.ncols input) $ (cursorRot >>= (,)) . to0Cursor
       where
         cursorRot cur = (rotations `on` mxGetElem' cur) input solved
         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
