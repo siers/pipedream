@@ -5,10 +5,14 @@ let
     base
     containers
     extra
+    lens
     matrix
     network
+    primitive
     text
     unordered-containers
+    vector
+    vector-th-unbox
     websockets
   ]);
 in
