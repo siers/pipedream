@@ -99,18 +99,14 @@ instance Show Progress where
 matrixBounded :: MMaze -> Cursor -> Bool
 matrixBounded m (x, y) = x >= 0 && y >= 0 && width m > x && height m > y
 
-mxGetElem :: Int -> Int -> Matrix a -> a
-mxGetElem = undefined
-mxGetElem' = uncurry mxGetElem
-
 mazeSize :: MMaze -> Int
 mazeSize MMaze{width, height} = width * height
 
 mazeLists :: Int -> Int -> V.Vector a -> [[a]]
-mazeLists width height board = [ [ board V.! (x + y * height) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
+mazeLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
 mazeCursor :: MMaze -> Int -> Cursor
-mazeCursor MMaze{width} = flip quotRem width
+mazeCursor MMaze{width} = swap . flip quotRem width
 
 parse :: String -> IO MMaze
 parse input = do
@@ -163,6 +159,11 @@ mazeSolve m@MMaze{board, width, locked, depth} cursor@(x, y) p = do
   board <- MV.write board (x + y * width) p
   locked <- MV.write locked (x + y * width) cursor
   pure $ m { depth = depth + 1 }
+
+-- mazePop :: MMaze -> IO Maze
+-- mazePop m@MMaze{board, depth} = do
+--   locked <- MV.read (depth - 1)
+--   board <
 
 mazeEquate :: MMaze -> Cursor -> Cursor -> IO ()
 mazeEquate MMaze{board, width} partId (x, y) =
