@@ -9,23 +9,7 @@ ws ws://maze.server.host/game-pipes/
 ┃┳┫┳╺┣┛━
 ┗┓╸╻╺┛┛┏
 
-["━", "┛", "┃", "┫", "┗", "┓", "┻", "╹", "┣", "╺", "┏", "╻", "╸", "┳", "╋"]
-
-━
-┃
-┏
-┓
-┗
-┛
-┣
-┫
-┳
-┻
-╋
-╸
-╹
-╺
-╻
+━┃┏┓┗┛┣┫┳┻╋╸╹╺╻
 
 1,    ╹
 12,   ┗
@@ -43,60 +27,17 @@ ws ws://maze.server.host/game-pipes/
 34,   ┓
 4,    ╸
 
-1: 8x8
-5: 1200x130
-6: 3000x1000
-
-    validateDirection d =
-      trace (show (d, rot, "//", filter (flipDir d ==) thisRequires, filter (flipDir d ==) thatRequires)) $
-      filter (flipDir d ==) thisRequires == filter (flipDir d ==) thatRequires
-
-            killStrandedSides :: [()]
-            killStrandedSides =
-              if any stranded $ cursorDeltasSafe maze cur unpointed
-              then []
-              else [()]
-              where
-                unpointed = flipPix $ mapChar rotated
-                stranded = cursorDeltasSafe maze
-
-    -- maze = Mx.mapPos (\_ -> fst . (canonicalRotations !)) maze'
-    -- () signals fialure
-    -- badContinues :: [Continue] -> CursorSet -> Maze -> Bool
-    -- badContinues continues solveds maze =
-    --   any null . (\x -> trace (show ("subsolves:", x)) x) $ do
-    --     c@(h, o) <- take 20 . drop 1 $ continues
-    --     -- solve'' 100 0 o h [] solveds (continues \\ [c]) maze
-    --     (pure $ solve'' 100 0 o (t h) [] solveds (continues \\ [c]) maze) :: [[Either () Maze]]
-
-        -- z <- seq (t (lifespan /= (-1), iter `mod` 5 == 0, badContinues continues solveds maze)) $
-        --   if lifespan /= (-1) && iter `mod` 5 == 0 && badContinues continues solveds maze
-        --   then []
-        --   else [()]
-        -- z <- if lifespan > 0 then trace (show ("trying", lifespan, iter, rotations)) [()] else [()]
-
-m n = Mx.matrix 20 20 (const n)
-matrixCopy (constraintMet [(4, (0,1))] . (\(y, x) -> (x - 1, y - 1))) (m 0) (m 1)
-
-    -- solve' psolutions = (>>= solve' . map (widenSolution 2)) . (>>= combine) . sequence $ (map traceBoard psolutions) >>= solve'' (-1)
-          -- traverse (foldM1 combinePsolves . (\x -> trace (show $ map (\g -> (constraints $ head g, length g)) x) (seq (traceBoard . head <$> x)) x) . groupSortOn constraints)
-
-    badS = not . Set.null $ Set.intersection (solveds a) (solveds b)
-    badC = not . Set.null $ Set.intersection (Set.fromList $ constraints a) (Set.fromList $ constraints b)
-    badCopy = not . Set.null $
-      Set.intersection
-        (Set.fromList $ filter (constraintMet (constraints a)) (matrixIndices (maze a)))
-        (Set.fromList $ filter (constraintMet (constraints b)) (matrixIndices (maze b)))
-
-        -- group = map snd . sortOn fst . groupSort . map ((map (quadrantShrink 2) . constraints) >>= (,))
-
---
-
 I: ━, ┃
 L: ┏, ┛, ┓, ┗
 T: ┣, ┫, ┳, ┻
 X: ╋
 i: ╸, ╹, ╺, ╻
+
+1: 8x8
+5: 1200x130
+6: 3000x1000
+
+--
 
 1. mums nevajag immutable, mums vajag mutable
 1.1. mutable ja tikai viens
@@ -180,6 +121,19 @@ i: ╸, ╹, ╺, ╻
 4. choice! there's the option to abandon solutions with unfavorable characteristics (unconnected component with long, narrow path)
 4.1. narrow: compute another score for narrowness, return the maze
 
+2021-01-17-23:33:23
+1. mutable vector rewrite
+2. audit mazeReads to spot any redundancy
+3. cursorDeltasWithWalls
+4. strict data everywhere
+5. suspendable progress with data about the remaning search space [[Rotation]] or, essentially, [[Continue]]
+6. backtracking with fairness and thus parallel
+(7. explore if it's worth to keep a pure, unsafe frozen version of MVector)
+
+2021-01-18-23:37:26
+1. mvector refactor last bug: unwind should also unwind partEquiv modifications and maybe partEquiv should be Maybe
+2. export mutations to top, so it's easier write the unwind procedure
+
 --
 
 9f9a4fe
@@ -195,17 +149,21 @@ runhaskell solve.hs 2>&1 < samples/2  74.92s user 3.69s system 84% cpu 1:33.56 t
 
 --
 
-% samples/get 1; runhaskell solve.hs 2>&1 < samples/1
-
 % mkdir -p trash; (cat trash/style.html 2>/dev/null; sed 's:\(.\):<span>\1</span>:g; s/$/<br>/' < samples/1) > trash/sample.html
 
-% ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve < samples/2
+--
 
-$ ghc solve.hs -rtsopts -with-rtsopts='-M1024m' && ./solve < samples/3
+# profiler
+  % ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve < samples/2
 
-% ghc solve.hs -prof -with-rtsopts='-xc' && time ./solve < samples/1
+# print trace of crash
+  % ghc solve.hs -prof -with-rtsopts='-xc' && ./solve < samples/2
 
-% ghc solve.hs -threaded -with-rtsopts='-N8' && time ./solve < ./samples/3
+# restrict heap
+  $ ghc solve.hs -rtsopts -with-rtsopts='-M1024m' && ./solve < samples/3
+
+# run 8 cores
+  % ghc solve.hs -threaded -with-rtsopts='-N8' && time ./solve < ./samples/3
 
 --
 

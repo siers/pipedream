@@ -331,7 +331,7 @@ solveContinue
       continues' <- continues' origin'
       pure $ Progress (iter + 1) continues' maze
       where
-        continues' origin = t <$> do
+        continues' origin = do
           let deltas' = filter (not . solved . (view _1)) deltas
           next <- traverse (cursorToContinue maze (toPix this) origin created) deltas'
           dropWhileM (solvedM . cursor) . sortOn score $ next ++ continues
