@@ -3,3 +3,4 @@ solve
 *.o
 *.prof
 dist*/
+*.dyn*

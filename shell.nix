@@ -6,10 +6,10 @@ let
     containers
     extra
     lens
-    matrix
     network
     primitive
     text
+    transformers
     unordered-containers
     vector
     vector-th-unbox
