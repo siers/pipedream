@@ -9,7 +9,7 @@ module Main where
 import Control.Lens (view, _1, _2, _3)
 import Control.Monad.Trans.Except (runExceptT, ExceptT(..))
 import Control.Monad.Extra (allM)
-import Control.Monad (join, mplus, filterM, void)
+import Control.Monad (join, mplus, filterM, void, mfilter)
 import Control.Monad.Primitive (RealWorld)
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
@@ -21,7 +21,6 @@ import Data.Vector.Unboxed.Deriving (derivingUnbox)
 import Data.Vector.Unboxed.Mutable (MVector)
 import Debug.Trace (trace)
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as UV
 import qualified Data.Vector.Unboxed.Mutable as MV
@@ -36,6 +35,7 @@ import System.Environment
 import Data.Foldable (traverse_)
 
 t a = seq (trace (show a) a) a
+t' l a = seq (trace (show l ++ ": " ++ show a) a) a
 
 type Direction = Int -- top 0, right 1, bottom 2, left 3
 type Rotation = Int
@@ -46,8 +46,8 @@ type Cursor = (Int, Int)
 -- smallest cursor (unique by def. ascending order)
 type PartId = Cursor
 
-type MazeDelta = (Piece, Cursor, Direction)
-
+-- Continue represents splits that are saved for later
+-- Continues in progress may turn out to be already solved, which must be checked
 data Continue = Continue
   { cursor :: Cursor
   , choices :: Int -- # of valid rotatonis
@@ -61,7 +61,9 @@ data Piece = Piece
   { pipe :: Char
   , solved :: Bool
   , partId :: PartId -- meaningless if not solved
-  }
+  } deriving Show
+
+type PieceDelta = (Piece, Cursor, Direction)
 
 data MMaze = MMaze -- Mutable Maze
   { board :: MVector RealWorld Piece
@@ -86,8 +88,8 @@ derivingUnbox "Piece"
   [| \(c, s, p) -> Piece c s p |]
 
 instance Show Continue where
-  show Continue{cursor, direct} =
-    "Cursor " ++ show cursor ++ if direct then "d" else "u"
+  show Continue{cursor, direct, origin} =
+    "Continue " ++ show cursor ++ (if direct then "d" else "u") ++ " from " ++ show origin
 
 instance Show Progress where
   show ps@Progress{iter, continues} =
@@ -125,13 +127,12 @@ renderWithPositions Progress{maze=maze@MMaze{board, width, height}, continues} =
     color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash
     colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partEquateUnsafe maze partId) else Nothing
 
-    colorSet cur = printf "\x1b[%sm" . fst <$> find (Set.member cur . snd)
-      [ ("31", Set.fromList . map cursor $ (((:[]) . fst) `foldMap` uncons continues)) -- red
-      , ("32", Set.fromList . map cursor $ continues) -- green
-      ]
+    headSafe l = fst <$> uncons l
+    colorHead cur = printf "\x1b[31m" <$ ((cur ==) `mfilter` (cursor <$> headSafe continues))
+    colorContinues cur = printf "\x1b[32m" <$ find ((cur ==) . cursor) continues
 
     color :: Cursor -> Piece -> Maybe String
-    color cur piece = colorSet cur `mplus` colorPart cur piece
+    color cur piece = colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
 
     fmt idx piece@Piece{pipe} =
       printf $ fromMaybe (pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c pipe) $ color (mazeCursor maze idx) piece
@@ -145,7 +146,7 @@ traceBoard progress@Progress{iter, maze=maze@MMaze{board, depth}} = do
   tracer mode *> pure progress
   where
     freq = (mazeSize maze) `div` 10
-    now = iter `mod` freq == 0
+    now = True -- iter `mod` freq == 0
     tracer mode -- reorder/comment out clauses to disable tracing
       | now && mode == "board" = traceStr >>= putStrLn
       | now && mode == "perc" = solvedStr >>= putStrLn
@@ -155,12 +156,12 @@ traceBoard progress@Progress{iter, maze=maze@MMaze{board, depth}} = do
     solvedStr = pure $ ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    traceStr = (clear ++) <$> renderWithPositions progress
-    -- traceStr = renderWithPositions progress
+    -- traceStr = (clear ++) <$> renderWithPositions progress
+    traceStr = renderWithPositions progress
 
-mazeSolve :: MMaze -> Cursor -> Piece -> IO MMaze
-mazeSolve m@MMaze{board, width, locked, depth} cursor@(x, y) p = do
-  board <- MV.write board (x + y * width) p
+mazeSolve :: MMaze -> Cursor -> Char -> IO MMaze
+mazeSolve m@MMaze{board, width, locked, depth} cursor@(x, y) pipe = do
+  board <- MV.modify board (\p -> p { pipe, solved = True }) (x + y * width)
   locked <- MV.write locked depth cursor
   pure $ m { depth = depth + 1 }
 
@@ -244,8 +245,7 @@ cursorDelta (x, y) 2 = (x, y + 1)
 cursorDelta (x, y) 3 = (x - 1, y)
 cursorDelta _ _      = error "only defined for 4 directions"
 
--- just to be able to switch quickly to see if it's better
-cursorDeltaPieces :: MMaze -> Cursor -> IO [(Piece, Cursor, Direction)]
+cursorDeltaPieces :: MMaze -> Cursor -> IO [PieceDelta]
 cursorDeltaPieces m c =
   traverse (_1 (mazeRead m))
   . filter (matrixBounded m . (view _1))
@@ -273,15 +273,15 @@ pixValidRotations maze@MMaze{board} cur = do
     chooseRotation _ = rotations
 
     validateDirection this rotation direction = do
-      -- TODO: refactor condition to ifless, make unbounded be (Piece ' ' true (0, 0))
-      Piece{pipe=that, solved} <- if bounded then mazeRead maze delta else pure (Piece ' ' False (0, 0))
+      -- TODO: refactor condition to ifless, make unbounded be (Piece ' ' true (0, 0)) and write cursorDeltaPiecesWithWalls
+      Piece{pipe=that, solved} <- if bounded then mazeRead maze delta else pure (Piece ' ' True (0, 0))
       pure $ out that solved
         where
-          out that solved = if not bounded || solved then pixValid (this, that, rotation, direction) else True
+          out that solved = not solved || pixValid (this, that, rotation, direction)
           bounded = matrixBounded maze delta
           delta = cursorDelta cur direction
 
-cursorToContinue :: MMaze -> Pix -> PartId -> Int -> (Piece, Cursor, Direction) -> IO Continue
+cursorToContinue :: MMaze -> Pix -> PartId -> Int -> PieceDelta -> IO Continue
 cursorToContinue maze pix origin created (_, c@(x, y), o) = do
   choices <- length <$> pixValidRotations maze c
   let direct = o `elem` pix
@@ -293,8 +293,8 @@ cursorToContinue maze pix origin created (_, c@(x, y), o) = do
 
 solveContinue :: Progress -> Continue -> IO Solution
 solveContinue
-  Progress{iter, maze=maze@MMaze{board, depth}, continues}
-  Continue{cursor=cur, created, origin} =
+  p@Progress{iter, maze=maze@MMaze{board, depth}, continues}
+  c@Continue{cursor=cur, created, origin} =
     if depth == mazeSize maze
     then pure (Left maze)
     else do
@@ -305,27 +305,27 @@ solveContinue
 
       if dead
       then pure (Right [])
-      else progress this deltas directDeltas >>= traceBoard >>= solve'
+      else progress this deltas directDeltas >>= solve'
 
   where
     solvedM = fmap solved . mazeRead maze
 
-    dead :: Piece -> [MazeDelta] -> IO Bool
+    dead :: Piece -> [PieceDelta] -> IO Bool
     dead Piece{partId=thisPart} deltas = do
-      allM id $ stuck : map continued continues
+      allM id $ stuck : map discontinued continues
       where
-        stuck = pure $ all (solved . (view _1)) $ deltas
-        continued Continue{cursor=c} =
-          (\thatPart solved -> thisPart == thatPart && not solved) <$> partEquate maze c <*> solvedM c
+        stuck = pure $ not . any (not . solved . (view _1)) $ deltas
+        discontinued Continue{cursor=c, origin} =
+          (\thatPart solved -> thisPart /= thatPart || solved) <$> partEquate maze c <*> solvedM c
 
-    progress :: Char -> [MazeDelta] -> [MazeDelta] -> IO Progress
+    progress :: Char -> [PieceDelta] -> [PieceDelta] -> IO Progress
     progress this deltas directDeltas = do
       (origin':neighbours) <- sort . (++ [origin]) <$> traverse (partEquate maze . (view _2)) directDeltas
       mazeEquate maze origin' `traverse_` neighbours
       continues' <- continues' origin'
       pure $ Progress (iter + 1) continues' maze
       where
-        continues' origin = do
+        continues' origin = t <$> do
           let deltas' = filter (not . solved . (view _1)) deltas
           next <- traverse (cursorToContinue maze (toPix this) origin created) deltas'
           dropWhileM (solvedM . cursor) . sortOn score $ next ++ continues
@@ -339,7 +339,8 @@ solve' progress@Progress{iter, maze, continues=(continue: continues)} = do
   where
     unwind = (<* ExceptT (return <$> mazePop maze))
     solveCursor this = unwind . ExceptT $ do
-      maze <- mazeSolve maze (cursor continue) (Piece this True (origin continue))
+      maze <- mazeSolve maze (cursor continue) this
+      traceBoard progress
       solveContinue progress { continues, maze } continue
 
 solve :: MMaze -> IO [MMaze]
@@ -390,4 +391,4 @@ main = do
 
   if websocket
   then withSocketsDo $ WS.runClient "maze.server.host" 80 "/game-pipes/" pļāpātArWebsocketu
-  else render . head =<< solve =<< parse =<< getContents
+  else mapM_ render =<< solve =<< parse =<< getContents
