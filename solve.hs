@@ -245,11 +245,20 @@ cursorDelta (x, y) 2 = (x, y + 1)
 cursorDelta (x, y) 3 = (x - 1, y)
 cursorDelta _ _      = error "only defined for 4 directions"
 
-cursorDeltaPieces :: MMaze -> Cursor -> IO [PieceDelta]
-cursorDeltaPieces m c =
+mazeDeltas :: MMaze -> Cursor -> IO [PieceDelta]
+mazeDeltas m c =
   traverse (_1 (mazeRead m))
   . filter (matrixBounded m . (view _1))
   $ (\d -> (cursorDelta c d, cursorDelta c d, d)) `map` directions
+
+mazeDeltasWalls :: MMaze -> Cursor -> IO [PieceDelta]
+mazeDeltasWalls m c =
+  traverse fetch $ (\d -> (cursorDelta c d, d)) `map` directions
+  where
+    fetch (c, d) =
+      if matrixBounded m c
+      then (, c, d) <$> mazeRead m c
+      else pure (Piece ' ' True (0, 0), c, d)
 
 {- Solver bits -}
 
@@ -263,8 +272,11 @@ pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
 pixValidRotations :: MMaze -> Cursor -> IO [Char]
 pixValidRotations maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
-  rotation <- filterM (\r -> allM (validateDirection this r) directions) (chooseRotation this)
-  pure $ map (flip rotateChar this) rotation
+  deltas <- mazeDeltasWalls maze cur
+  pure $
+    map (flip rotateChar this)
+    . filter (flip all deltas . validateDirection this)
+    $ chooseRotation this
   where
     chooseRotation :: Char -> Pix
     chooseRotation '╋' = [0]
@@ -272,14 +284,8 @@ pixValidRotations maze@MMaze{board} cur = do
     chooseRotation '━' = [0,1]
     chooseRotation _ = rotations
 
-    validateDirection this rotation direction = do
-      -- TODO: refactor condition to ifless, make unbounded be (Piece ' ' true (0, 0)) and write cursorDeltaPiecesWithWalls
-      Piece{pipe=that, solved} <- if bounded then mazeRead maze delta else pure (Piece ' ' True (0, 0))
-      pure $ out that solved
-        where
-          out that solved = not solved || pixValid (this, that, rotation, direction)
-          bounded = matrixBounded maze delta
-          delta = cursorDelta cur direction
+    validateDirection this rotation (Piece{pipe=that, solved}, _, direction) = do
+      not solved || pixValid (this, that, rotation, direction)
 
 cursorToContinue :: MMaze -> Pix -> PartId -> Int -> PieceDelta -> IO Continue
 cursorToContinue maze pix origin created (_, c@(x, y), o) = do
@@ -299,7 +305,7 @@ solveContinue
     then pure (Left maze)
     else do
       piece@Piece{pipe=this} <- mazeRead maze cur
-      deltas <- cursorDeltaPieces maze cur
+      deltas <- mazeDeltas maze cur
       directDeltas <- pure . filter ((`elem` toPix this) . view _3) $ deltas
       dead <- dead piece directDeltas
 
