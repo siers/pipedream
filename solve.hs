@@ -276,16 +276,14 @@ pixValidRotations :: MMaze -> Cursor -> IO [Char]
 pixValidRotations maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
   deltas <- mazeDeltasWalls maze cur
-  pure $
-    map (flip rotateChar this)
-    . filter (flip all deltas . validateDirection this)
-    $ chooseRotation this
+  pure $ map (flip rotateChar this) . filter (validateRotation this deltas) $ directionMap this
   where
-    chooseRotation :: Char -> Pix
-    chooseRotation '╋' = [0]
-    chooseRotation '┃' = [0,1]
-    chooseRotation '━' = [0,1]
-    chooseRotation _ = rotations
+    directionMap '╋' = [0]
+    directionMap '┃' = [0,1]
+    directionMap '━' = [0,1]
+    directionMap _ = rotations
+
+    validateRotation this deltas = flip all deltas . validateDirection this
 
     validateDirection this rotation (Piece{pipe=that, solved}, _, direction) = do
       not solved || pixValid (this, that, rotation, direction)
