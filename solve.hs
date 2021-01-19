@@ -13,9 +13,9 @@ import Control.Monad (join, mplus, mfilter)
 import Control.Monad.Primitive (RealWorld)
 import Data.Either.Extra (fromLeft, mapLeft)
 import Data.Function (on)
-import Data.List (sort, sortOn, find, uncons)
+import Data.List (sort, sortOn, find, uncons, elemIndex)
 import Data.Map (Map, (!))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import Data.Tuple (swap)
 import Data.Vector.Unboxed.Deriving (derivingUnbox)
 import Data.Vector.Unboxed.Mutable (MVector)
@@ -28,11 +28,12 @@ import Text.Printf (printf)
 import System.IO.Unsafe
 
 -- IO
+import Data.Foldable (traverse_)
+import Data.Text (Text)
 import Network.Socket (withSocketsDo)
 import qualified Data.Text as T
 import qualified Network.WebSockets as WS
 import System.Environment
-import Data.Foldable (traverse_)
 
 t a = seq (trace (show a) a) a
 t' l a = seq (trace (show l ++ ": " ++ show a) a) a
@@ -72,7 +73,6 @@ data MMaze = MMaze -- Mutable Maze
   , width :: Int
   , height :: Int
   , depth :: Int -- recursion depth
-  -- , choices -- [[Cursor]] -- language of choices left to explore -- maybe for fairness later on
   }
 
 type Unwind = (Cursor, [Cursor])
@@ -80,6 +80,7 @@ type Unwind = (Cursor, [Cursor])
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
   , continues :: [Continue]
+  -- , choices -- [[(Cursor)]] -- language of choices left to explore -- maybe for fairness later on
   , unwinds :: [Unwind]
   , maze :: MMaze
   }
@@ -358,22 +359,22 @@ solve maze = do
 
 {- Main -}
 
-rotateStr = undefined
--- rotateStr' :: Maze -> Maze -> Text
--- rotateStr' = (concatenate .) . rotations
---   where
---     concatenate :: [(Rotation, Cursor)] -> Text
---     concatenate =
---       (T.pack "rotate " <>)
---       . T.intercalate (T.pack "\n")
---       . map (\(x, y) -> T.pack $ show x ++ " " ++ show y)
---       . (>>= (\(r, (x, y)) -> take r (repeat (x, y))))
+rotateStr :: MMaze -> MMaze -> IO Text
+rotateStr input solved = concatenate <$> rotations input solved
+  where
+    concatenate :: [(Cursor, Rotation)] -> Text
+    concatenate =
+      (T.pack "rotate " <>)
+      . T.intercalate (T.pack "\n")
+      . map (\(x, y) -> T.pack $ show x ++ " " ++ show y)
+      . (>>= (\((x, y), r) -> take r (repeat (x, y))))
 
---     rotations :: Maze -> Maze -> [(Rotation, Cursor)]
---     rotations input solved = Mx.toList . Mx.matrix (Mx.nrows input) (Mx.ncols input) $ (cursorRot >>= (,)) . undefined
---       where
---         cursorRot cur = (rotations `on` mxGetElem' cur) input solved
---         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
+    rotations :: MMaze -> MMaze -> IO [(Cursor, Rotation)]
+    rotations maze@MMaze{board=input, width, height} MMaze{board=solved} = do
+      zipped <- (UV.zip <$> UV.freeze input <*> UV.freeze solved)
+      pure $ UV.toList . UV.imap (\i (Piece{pipe=p}, Piece{pipe=q}) -> (mazeCursor maze i, rotations p q)) $ zipped
+      where
+        rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
 
 pļāpātArWebsocketu :: WS.ClientApp ()
 pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
@@ -382,13 +383,14 @@ pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
     recv = T.unpack <$> WS.receiveData conn
 
     solveLevel level = do
-      send (T.pack $ "new " ++ show level); recv
+      send (T.pack $ "new " ++ show level)
+      recv
 
       send (T.pack "map")
       maze <- parse . T.unpack . T.drop 5 =<< WS.receiveData conn
-      (solved: _) <- solve maze
 
-      send (rotateStr maze solved); recv
+      send =<< rotateStr maze . head =<< solve maze
+      recv
 
       send (T.pack "verify")
       putStrLn =<< recv
