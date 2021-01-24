@@ -50,18 +50,6 @@ type Cursor = (Int, Int)
 -- They're marked ahead of solveds, so Continue{direct=false} may already be connected.
 type PartId = Cursor
 
--- Continue represents the piece that should be solved next
--- Continues in Progress may turn out to be already solved, which must be checked
-data Continue = Continue
-  { cursor :: Cursor
-  , char :: Char -- defaulted to ' ', but set when guessing
-  , choices :: Int -- # of valid rotations
-  , direct :: Bool -- directly pointed to from previous continue
-  , origin :: PartId
-  , created :: Int -- created at depth
-  , score :: Int
-  } deriving Eq
-
 data Piece = Piece
   { pipe :: Char
   , solved :: Bool
@@ -76,6 +64,18 @@ data MMaze = MMaze -- Mutable Maze
   , width :: Int
   , height :: Int
   }
+
+-- Continue represents the piece that should be solved next
+-- Continues in Progress may turn out to be already solved, which must be checked
+data Continue = Continue
+  { cursor :: Cursor
+  , char :: Char -- defaulted to ' ', but set when guessing
+  , choices :: Int -- # of valid rotations
+  , direct :: Bool -- directly pointed to from previous continue
+  , origin :: PartId
+  , created :: Int -- created at depth
+  , score :: Int
+  } deriving Eq
 
 type Unwind = (Cursor, [Cursor])
 
@@ -129,8 +129,11 @@ mazeBounded m (x, y) = x >= 0 && y >= 0 && width m > x && height m > y
 mazeSize :: MMaze -> Int
 mazeSize MMaze{width, height} = width * height
 
-mazeLists :: Int -> Int -> V.Vector a -> [[a]]
-mazeLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
+vectorLists :: Int -> Int -> V.Vector a -> [[a]]
+vectorLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
+
+mazeLists :: MMaze -> IO [[Piece]]
+mazeLists MMaze{board, width, height} = vectorLists width height . UV.convert <$> UV.freeze board
 
 mazeCursor :: MMaze -> Int -> Cursor
 mazeCursor MMaze{width} = swap . flip quotRem width
@@ -174,7 +177,7 @@ partEquateUnsafe m p = unsafePerformIO $ partEquate m p
 
 renderWithPositions :: Progress -> IO String
 renderWithPositions Progress{depth, maze=maze@MMaze{board, width, height}, continues} =
-  unlines . map concat . mazeLists width height . V.imap fmt . UV.convert <$> UV.freeze board
+  unlines . map concat . vectorLists width height . V.imap fmt . UV.convert <$> UV.freeze board
   where
     colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
     color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash
@@ -331,7 +334,7 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
       allM id $ stuck : map (discontinued partIdEquated) continues
       where
         stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
-        discontinued thisPart Continue{cursor=c, origin} = do
+        discontinued thisPart Continue{cursor=c} = do
           connected <- (thisPart /=) <$> partEquate maze c
           solved <- cursorSolved maze c
           pure $ not connected || solved
@@ -362,7 +365,7 @@ solveContinue
         & unwindsL %~ ((cur, neighbours) :)
       where
         continuesNextSorted origin = do
-          next <- traverse (cursorToContinue maze continue) . filter (not . solved . view _1) $ deltas
+          next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) $ deltas
           dropWhileM (cursorSolved maze . cursor) . sortOn score $ next ++ continues
 
 -- Solves pieces by backtracking, stops when maze is solved.
