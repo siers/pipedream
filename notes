@@ -154,7 +154,7 @@ runhaskell solve.hs 2>&1 < samples/2  74.92s user 3.69s system 84% cpu 1:33.56 t
 --
 
 # profiler
-  % ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve < samples/2
+  % ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' -fexternal-interpreter && ./solve < samples/1
 
 # print trace of crash
   % ghc solve.hs -prof -with-rtsopts='-xc' && ./solve < samples/2
@@ -164,6 +164,9 @@ runhaskell solve.hs 2>&1 < samples/2  74.92s user 3.69s system 84% cpu 1:33.56 t
 
 # run 8 cores
   % ghc solve.hs -threaded -with-rtsopts='-N8' && time ./solve < ./samples/3
+
+# :l solve without having to resolve all type errors (amazing!)
+  % ghci -fdefer-type-errors
 
 --
 
