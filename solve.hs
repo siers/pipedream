@@ -108,10 +108,23 @@ instance Show Progress where
 instance Show MMaze where
   show _ = "MMaze"
 
-{- MMaze and Matrix operations -}
+{--- Generic functions ---}
 
-matrixBounded :: MMaze -> Cursor -> Bool
-matrixBounded m (x, y) = x >= 0 && y >= 0 && width m > x && height m > y
+-- | Monadic 'dropWhile' from monad-loops package
+dropWhileM :: (Monad m) => (a -> m Bool) -> [a] -> m [a]
+dropWhileM _ []     = return []
+dropWhileM p (x:xs) = p x >>= \q -> if q then dropWhileM p xs else return (x:xs)
+
+{--- MMaze and Matrix operations ---}
+
+parse :: String -> IO MMaze
+parse input = do
+  chars <- UV.thaw . UV.fromList . map (\c -> Piece c False (0, 0) False) . join $ rect
+  pure $ MMaze chars (length (head rect)) (length rect)
+  where rect = filter (not . null) $ lines input
+
+mazeBounded :: MMaze -> Cursor -> Bool
+mazeBounded m (x, y) = x >= 0 && y >= 0 && width m > x && height m > y
 
 mazeSize :: MMaze -> Int
 mazeSize MMaze{width, height} = width * height
@@ -124,54 +137,6 @@ mazeCursor MMaze{width} = swap . flip quotRem width
 
 mazeClone :: MMaze -> IO MMaze
 mazeClone m@MMaze{board} = (\b -> m { board = b }) <$> MV.clone board
-
-parse :: String -> IO MMaze
-parse input = do
-  chars <- UV.thaw . UV.fromList . map (\c -> Piece c False (0, 0) False) . join $ rect
-  pure $ MMaze chars (length (head rect)) (length rect)
-  where rect = filter (not . null) $ lines input
-
-renderWithPositions :: Progress -> IO String
-renderWithPositions Progress{maze=maze@MMaze{board, width, height}, continues} =
-  unlines . map concat . mazeLists width height . V.imap fmt . UV.convert <$> UV.freeze board
-  where
-    colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
-    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash
-    colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partEquateUnsafe maze partId) else Nothing
-
-    headSafe l = fst <$> uncons l
-    colorHead cur = printf "\x1b[31m" <$ ((cur ==) `mfilter` (cursor <$> headSafe continues))
-    colorContinues cur = printf "\x1b[32m" <$ find ((cur ==) . cursor) continues
-
-    color :: Cursor -> Piece -> Maybe String
-    color cur piece = colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
-
-    fmt idx piece@Piece{pipe} =
-      printf $ fromMaybe (pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c pipe) $ color (mazeCursor maze idx) piece
-
-render :: MMaze -> IO ()
-render = (putStrLn =<<) . renderWithPositions . Progress 0 0 [] [] []
-
-traceBoard :: Continue -> Progress -> IO Progress
-traceBoard continue progressNext@Progress{iter, depth, maze=maze@MMaze{board}} = do
-  mode <- fromMaybe "" . lookup "trace" <$> getEnvironment
-  tracer mode *> pure progressNext
-  where
-    progress = progressNext & continuesL %~ (continue:)
-    freq = (mazeSize maze) `div` 10
-    now = True -- iter `mod` freq == 0
-    tracer mode -- reorder/comment out clauses to disable tracing
-      | now && mode == "board" = traceStr >>= putStrLn
-      | now && mode == "perc" = solvedStr >>= putStrLn
-      | True = pure ()
-
-    percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
-    solvedStr = pure $ ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
-
-    clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    -- traceStr = (clear ++) <$> renderWithPositions progress
-    -- traceStr = ((show iter ++ "\n") ++) <$> renderWithPositions progress
-    traceStr = renderWithPositions progress
 
 mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO ()
 mazeModify m@MMaze{board, width} f (x, y) = MV.modify board f (x + y * width)
@@ -205,14 +170,54 @@ partEquate maze@MMaze{board} v = loop' =<< find v
 partEquateUnsafe :: MMaze -> PartId -> PartId
 partEquateUnsafe m p = unsafePerformIO $ partEquate m p
 
-{- Generic functions -}
+{--- Rendering, tracing ---}
 
--- | Monadic 'dropWhile' from monad-loops package
-dropWhileM :: (Monad m) => (a -> m Bool) -> [a] -> m [a]
-dropWhileM _ []     = return []
-dropWhileM p (x:xs) = p x >>= \q -> if q then dropWhileM p xs else return (x:xs)
+renderWithPositions :: Progress -> IO String
+renderWithPositions Progress{depth, maze=maze@MMaze{board, width, height}, continues} =
+  unlines . map concat . mazeLists width height . V.imap fmt . UV.convert <$> UV.freeze board
+  where
+    colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
+    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash
+    colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partEquateUnsafe maze partId) else Nothing
 
-{- Model -}
+    headSafe l = fst <$> uncons l
+    colorHead cur = printf "\x1b[31m" <$ ((cur ==) `mfilter` (cursor <$> headSafe continues))
+    colorContinues cur = printf "\x1b[32m" <$ find ((cur ==) . cursor) continues
+
+    color :: Cursor -> Piece -> Maybe String
+    color cur piece =
+      if depth == 0
+      then Nothing
+      else colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
+
+    fmt idx piece@Piece{pipe} =
+      printf $ fromMaybe (pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c pipe) $ color (mazeCursor maze idx) piece
+
+render :: MMaze -> IO ()
+render = (putStrLn =<<) . renderWithPositions . Progress 0 0 [] [] []
+
+traceBoard :: Continue -> Progress -> IO Progress
+traceBoard continue progressNext@Progress{iter, depth, maze=maze@MMaze{board}} = do
+  mode <- fromMaybe "" . lookup "trace" <$> getEnvironment
+  tracer mode *> pure progressNext
+  where
+    progress = progressNext & continuesL %~ (continue:)
+    freq = (mazeSize maze) `div` 10
+    now = True -- iter `mod` freq == 0
+    tracer mode -- reorder/comment out clauses to disable tracing
+      | now && mode == "board" = traceStr >>= putStrLn
+      | now && mode == "perc" = solvedStr >>= putStrLn
+      | True = pure ()
+
+    percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
+    solvedStr = pure $ ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
+
+    clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
+    -- traceStr = (clear ++) <$> renderWithPositions progress
+    -- traceStr = ((show iter ++ "\n") ++) <$> renderWithPositions progress
+    traceStr = renderWithPositions progress
+
+{--- Model ---}
 
 directions = [0, 1, 2, 3]
 rotations = directions
@@ -266,7 +271,7 @@ cursorDelta _ _      = error "only defined for 4 directions"
 mazeDeltas :: MMaze -> Cursor -> IO [PieceDelta]
 mazeDeltas m c =
   traverse (_1 (mazeRead m))
-  . filter (matrixBounded m . (view _1))
+  . filter (mazeBounded m . (view _1))
   $ (\d -> (cursorDelta c d, cursorDelta c d, d)) `map` directions
 
 mazeDeltasWalls :: MMaze -> Cursor -> IO [PieceDelta]
@@ -274,11 +279,11 @@ mazeDeltasWalls m c =
   traverse fetch . map (\d -> (cursorDelta c d, d)) $ directions
   where
     fetch (c, d) =
-      if matrixBounded m c
+      if mazeBounded m c
       then (, c, d) <$> mazeRead m c
       else pure (Piece ' ' True (0, 0) True, c, d)
 
-{- Solver bits -}
+{--- Solver bits ---}
 
 pixValid :: (Char, Char, Rotation, Direction) -> Bool
 pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
@@ -321,16 +326,17 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
   (mazeSolve maze continue >>= dead directDeltas) <* mazePop maze (cur, [])
   where
     dead :: [PieceDelta] -> Piece -> IO Bool
-    dead directDeltas Piece{partId=thisPart} = do
-      allM id $ stuck : map discontinued continues
+    dead directDeltas Piece{partId=partId} = do
+      partIdEquated <- partEquate maze partId
+      allM id $ stuck : map (discontinued partIdEquated) continues
       where
         stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
-        discontinued Continue{cursor=c, origin} = do
+        discontinued thisPart Continue{cursor=c, origin} = do
           connected <- (thisPart /=) <$> partEquate maze c
           solved <- cursorSolved maze c
           pure $ not connected || solved
 
-{- Solver -}
+{--- Solver ---}
 
 -- Solves a piece; if valid, (mutates the maze; sets unwind) else (return progress without mutations)
 solveContinue :: Progress -> Continue -> IO Progress
@@ -379,11 +385,9 @@ solve' progress@Progress{iter, depth, maze, continues=(continue: continues)} = d
       pure (p { continues = continues, space = guesses : space }, continue)
 
 solve :: MMaze -> IO MMaze
-solve mmaze = do
-  let progress = Progress 0 0 [Continue (0, 0) ' ' 0 True (0, 0) 0 0] [] []
-  maze <$> solve' (progress mmaze)
+solve = fmap maze . solve' . Progress 0 0 [Continue (0, 0) ' ' 0 True (0, 0) 0 0] [] []
 
-{- Main -}
+{--- Main ---}
 
 rotateStr :: MMaze -> MMaze -> IO Text
 rotateStr input solved = concatenate <$> rotations input solved
