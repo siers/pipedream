@@ -198,3 +198,37 @@ on 7a05ccc at 2021-01-10-15:26:16
   pixValid                              Main        solve.hs:(211,1)-(215,64)          0.9    1.5
   lookupConverge                        Main        solve.hs:(91,1)-(95,28)            0.5    1.1
   pixValidRotations                     Main        solve.hs:(218,1)-(237,73)          0.3    1.0
+
+--
+
+on ce59523 at 2021-01-25-23:51:04
+
+solve +RTS -p -RTS
+  total time  =        8.73 secs   (8727 ticks @ 1000 us, 1 processor)
+  total alloc = 19,387,362,136 bytes  (excludes profiling overheads)
+
+  COST CENTRE                       MODULE    SRC                        %time %alloc
+  mazeRead                          Main      solve.hs:143:1-67           32.4   41.1
+  solveContinue.continuesNextSorted Main      solve.hs:(370,5)-(372,84)   20.7   25.4
+  mazeCursorSolved                  Main      solve.hs:146:1-86            8.6   11.3
+  mazeModify                        Main      solve.hs:(149,1)-(152,8)     6.4    6.7
+  pieceDead.dead.discontinued       Main      solve.hs:(342,9)-(345,40)    2.5    1.4
+  solveContinue                     Main      solve.hs:(351,1)-(372,84)    2.1    0.8
+  mazeDeltas                        Main      solve.hs:(279,1)-(282,66)    1.9    1.1
+  partEquate.loop'.\                Main      solve.hs:179:27-81           1.7    0.5
+  rotateDir                         Main      solve.hs:263:1-31            1.6    0.7
+  pixValid.satisfied                Main      solve.hs:298:5-81            1.6    0.6
+  pieceRotations.validateRotation   Main      solve.hs:313:5-75            1.5    0.6
+  mazeBounded                       Main      solve.hs:128:1-70            1.5    0.7
+  toPix                             Main      solve.hs:259:1-19            1.4    0.0
+  solve'                            Main      solve.hs:(376,1)-(391,75)    1.1    0.4
+  partEquate.find                   Main      solve.hs:178:5-95            1.1    1.2
+  partEquate                        Main      solve.hs:(176,1)-(179,94)    1.1    0.4
+
+% ghc solve && for i in {1..4}; do time ./solve < samples/4 2>&1 | grep total; done
+./solve < samples/4 2>&1  4.87s user 0.03s system 99% cpu 4.900 total
+grep --colour total  0.00s user 0.00s system 0% cpu 4.899 total
+./solve < samples/4 2>&1  4.86s user 0.03s system 99% cpu 4.895 total
+grep --colour total  0.00s user 0.00s system 0% cpu 4.895 total
+./solve < samples/4 2>&1  4.86s user 0.03s system 99% cpu 4.891 total
+grep --colour total  0.00s user 0.00s system 0% cpu 4.890 total
