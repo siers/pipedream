@@ -161,7 +161,7 @@ cursorSolved maze = fmap solved . mazeRead maze
 
 mazeSolve :: MMaze -> Continue -> IO Piece
 mazeSolve m Continue{char, cursor} = do
-  mazeModify m (\p -> p { pipe = char, solved = True, connected = True }) cursor
+  mazeModify m (\p -> p { pipe = char, solved = True }) cursor
   mazeRead m cursor
 
 mazeEquate :: MMaze -> PartId -> [Cursor] -> IO Unwind
@@ -176,8 +176,8 @@ mazePop m@MMaze{board, width} unwind = do
 partEquate :: MMaze -> PartId -> IO PartId
 partEquate maze@MMaze{board} v = loop' =<< find v
   where
-    find v = (\Piece{connected, partId} -> if connected then partId else v) <$> mazeRead maze v
-    loop' v' = (\found -> if v' == v || v' == found then pure v' else loop' found) =<< find v
+    find f = (\Piece{connected, partId} -> if connected then partId else f) <$> mazeRead maze f
+    loop' v' = (\found -> if v' == v || v' == found then pure v' else loop' found) =<< find v'
 
 partEquateUnsafe :: MMaze -> PartId -> PartId
 partEquateUnsafe m p = unsafePerformIO $ partEquate m p
@@ -197,10 +197,7 @@ renderWithPositions Progress{depth, maze=maze@MMaze{board, width, height}, conti
     colorContinues cur = printf "\x1b[32m" <$ find ((cur ==) . cursor) continues
 
     color :: Cursor -> Piece -> Maybe String
-    color cur piece =
-      if depth == 0
-      then Nothing
-      else colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
+    color cur piece = colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
 
     fmt idx piece@Piece{pipe} =
       printf $ fromMaybe (pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c pipe) $ color (mazeCursor maze idx) piece
@@ -345,7 +342,7 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
       where
         stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
         discontinued Continue{cursor=c} = do
-          connected <- (thisPart /=) <$> partEquate maze c
+          connected <- (thisPart ==) <$> partEquate maze c
           solved <- cursorSolved maze c
           pure $ not connected || solved
 
@@ -354,14 +351,14 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
 -- Solves a piece; if valid, (mutates the maze; sets unwind) else (return progress without mutations)
 solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
-  progress@Progress{iter, maze=maze@MMaze{board}, continues}
-  continue@Continue{cursor=cur, char=this, created, origin} = do
-    unwindThis <- mazeRead maze cur
-    mazeSolve maze continue
+  progress@Progress{iter, depth, maze=maze@MMaze{board}, continues}
+  continue@Continue{cursor=cur, char=this, created, origin, direct} = do
+    unwindThis <- mazeRead maze cur <* mazeSolve maze continue
     deltas <- mazeDeltas maze cur
     directDeltas <- pure . filter ((`elem` toPix this) . view _3) $ deltas
 
-    (origin':neighbours) <- sort . (++ [origin]) <$> traverse (partEquate maze . (view _2)) directDeltas
+    neighbours <- traverse (partEquate maze) (origin : map (view _2) directDeltas)
+    (origin':neighbours') <- pure . sort $ origin : neighbours
     unwindEquate <- mazeEquate maze origin' neighbours
     continuesNext <- continuesNextSorted origin' deltas
 
