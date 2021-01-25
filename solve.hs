@@ -77,7 +77,8 @@ data Continue = Continue
   , score :: Int
   } deriving Eq
 
-type Unwind = [(Cursor, Piece)]
+type Unwind1 = (Cursor, Piece)
+type Unwind = [Unwind1]
 
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
@@ -159,9 +160,9 @@ mazeMap m@MMaze{board, width, height} f =
 mazeClone :: MMaze -> IO MMaze
 mazeClone m@MMaze{board} = (\b -> m { board = b }) <$> MV.clone board
 
-mazeSolve :: MMaze -> Continue -> IO Piece
+mazeSolve :: MMaze -> Continue -> IO Unwind1
 mazeSolve m Continue{char, cursor} =
-  mazeModify m (\p -> p { pipe = char, solved = True }) cursor
+  (cursor, ) <$> mazeModify m (\p -> p { pipe = char, solved = True }) cursor
 
 mazeEquate :: MMaze -> PartId -> [Cursor] -> IO Unwind
 mazeEquate m partId cursors = flip traverse cursors $ \cursor ->
@@ -275,8 +276,8 @@ cursorDelta (x, y) 2 = (x, y + 1)
 cursorDelta (x, y) 3 = (x - 1, y)
 cursorDelta _ _      = error "only defined for 4 directions"
 
-mazeDeltas :: MMaze -> Cursor -> IO [PieceDelta]
-mazeDeltas m c =
+mazeDeltas :: MMaze -> Cursor -> [Direction] -> IO [PieceDelta]
+mazeDeltas m c directions =
   traverse (_1 (mazeRead m))
   . filter (mazeBounded m . (view _1))
   $ (\d -> (cursorDelta c d, cursorDelta c d, d)) `map` directions
@@ -329,7 +330,7 @@ progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
 
 pieceDead :: MMaze -> (Continue, [Continue]) -> IO Bool
 pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues) = do
-  directDeltas <- filter ((`elem` toPix this) . view _3) <$> mazeDeltas maze cur
+  directDeltas <- mazeDeltas maze cur (toPix this)
   dead directDeltas =<< partEquate maze . partId =<< mazeRead maze cur
   where
     dead :: [PieceDelta] -> PartId -> IO Bool
@@ -338,9 +339,8 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
       where
         stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
         discontinued Continue{cursor=c} =
-          if cur == c
-          then pure True
-          else ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze c)
+          if cur == c then pure True else
+            ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze c)
 
 {--- Solver ---}
 
@@ -349,11 +349,10 @@ solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
   progress@Progress{iter, depth, maze=maze@MMaze{board}, continues}
   continue@Continue{cursor=cur, char=this, created, origin, direct} = do
-    unwindThis <- mazeRead maze cur <* mazeSolve maze continue
-    deltas <- mazeDeltas maze cur
-    directDeltas <- pure . filter ((`elem` toPix this) . view _3) $ deltas
+    unwindThis <- mazeSolve maze continue
+    deltas <- mazeDeltas maze cur directions
 
-    neighbours <- traverse (partEquate maze) (origin : map (view _2) directDeltas)
+    neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (toPix this))
     (origin':neighbours') <- pure . sort $ origin : neighbours
     unwindEquate <- mazeEquate maze origin' neighbours
     continuesNext <- continuesNextSorted origin' deltas
@@ -363,7 +362,7 @@ solveContinue
       & iterL %~ (+1)
       & depthL %~ (+1)
       & continuesL .~ continuesNext
-      & unwindsL %~ ((unwindEquate ++ [(cur, unwindThis)]) :)
+      & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
   where
     continuesNextSorted origin deltas = do
       next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) $ deltas
