@@ -22,6 +22,5 @@ executable solve
     , transformers
     , unordered-containers
     , vector
-    , vector-th-unbox
     , websockets
   default-language: Haskell2010

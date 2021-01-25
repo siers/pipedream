@@ -12,7 +12,6 @@ let
     transformers
     unordered-containers
     vector
-    vector-th-unbox
     websockets
   ]);
 in

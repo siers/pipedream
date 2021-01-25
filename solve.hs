@@ -5,7 +5,7 @@ module Main where
 
 -- solver
 
-import Control.Lens ((&), (%~), (.~), set, view, _1, _2, _3)
+import Control.Lens ((&), (%~), (.~), set, view, _1)
 import Control.Lens.TH
 import Control.Monad.Extra (allM, ifM)
 import Control.Monad (join, mplus, mfilter, filterM, void)
@@ -16,13 +16,11 @@ import Data.List (sort, sortOn, find, uncons, elemIndex)
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust)
 import Data.Tuple (swap)
-import Data.Vector.Unboxed.Deriving (derivingUnbox)
-import Data.Vector.Unboxed.Mutable (MVector)
+import Data.Vector.Mutable (MVector)
 import Debug.Trace (trace)
 import qualified Data.Map as Map
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as UV
-import qualified Data.Vector.Unboxed.Mutable as MV
+import qualified Data.Vector.Mutable as MV
 import System.IO.Unsafe
 import Text.Printf (printf)
 
@@ -89,11 +87,6 @@ data Progress = Progress
   , maze :: MMaze
   }
 
-derivingUnbox "Piece"
-  [t| Piece -> (Char, Bool, PartId, Bool) |]
-  [| \Piece{pipe, solved, partId, connected} -> (pipe, solved, partId, connected) |]
-  [| \(c, s, p, ct) -> Piece c s p ct |]
-
 makeLensesFor ((\n -> (n, n ++ "L")) <$> ["cursor", "char", "choices", "direct", "origin", "created", "score"]) ''Continue
 makeLensesFor ((\n -> (n, n ++ "L")) <$> ["iter", "depth", "continues", "space", "unwinds", "maze"]) ''Progress
 
@@ -120,7 +113,7 @@ dropWhileM p (x:xs) = p x >>= \q -> if q then dropWhileM p xs else return (x:xs)
 
 parse :: String -> IO MMaze
 parse input = do
-  board <- UV.thaw . UV.fromList . map (\c -> Piece c False (0, 0) False) . join $ rect
+  board <- V.thaw . V.fromList . map (\c -> Piece c False (0, 0) False) . join $ rect
   maze <- pure (MMaze board (length (head rect)) (length rect))
   maze <$ mazeMap maze (\c p -> p { partId = c })
   where rect = filter (not . null) $ lines input
@@ -135,7 +128,7 @@ vectorLists :: Int -> Int -> V.Vector a -> [[a]]
 vectorLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
 mazeLists :: MMaze -> IO [[Piece]]
-mazeLists MMaze{board, width, height} = vectorLists width height . UV.convert <$> UV.freeze board
+mazeLists MMaze{board, width, height} = vectorLists width height . V.convert <$> V.freeze board
 
 mazeCursor :: MMaze -> Int -> Cursor
 mazeCursor MMaze{width} = swap . flip quotRem width
@@ -186,7 +179,7 @@ partEquateUnsafe m p = unsafePerformIO $ partEquate m p
 
 renderWithPositions :: Progress -> IO String
 renderWithPositions Progress{depth, maze=maze@MMaze{board, width, height}, continues} =
-  unlines . map concat . vectorLists width height . V.imap fmt . UV.convert <$> UV.freeze board
+  unlines . map concat . vectorLists width height . V.imap fmt . V.convert <$> V.freeze board
   where
     colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
     color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash
@@ -399,8 +392,8 @@ rotateStr input solved = concatenate <$> rotations input solved
 
     rotations :: MMaze -> MMaze -> IO [(Cursor, Rotation)]
     rotations maze@MMaze{board=input, width, height} MMaze{board=solved} = do
-      zipped <- (UV.zip <$> UV.freeze input <*> UV.freeze solved)
-      pure $ UV.toList . UV.imap (\i (Piece{pipe=p}, Piece{pipe=q}) -> (mazeCursor maze i, rotations p q)) $ zipped
+      zipped <- (V.zip <$> V.freeze input <*> V.freeze solved)
+      pure $ V.toList . V.imap (\i (Piece{pipe=p}, Piece{pipe=q}) -> (mazeCursor maze i, rotations p q)) $ zipped
       where
         rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
 
