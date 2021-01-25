@@ -208,23 +208,22 @@ render = (putStrLn =<<) . renderWithPositions . Progress 0 0 [] [] []
 traceBoard :: Continue -> Progress -> IO Progress
 traceBoard continue progressNext@Progress{iter, depth, maze=maze@MMaze{board}} = do
   mode <- fromMaybe "" . lookup "trace" <$> getEnvironment
-  tracer mode *> pure progressNext
+  freq <- (read :: String -> Int) . fromMaybe "1" . lookup "freq" <$> getEnvironment
+  tracer mode freq *> pure progressNext
   where
     progress = progressNext & continuesL %~ (continue:)
-    freq = (mazeSize maze) `div` 10
-    now = True -- iter `mod` freq == 0
-    tracer mode -- reorder/comment out clauses to disable tracing
-      | now && mode == "board" = traceStr >>= putStrLn
-      | now && mode == "perc" = solvedStr >>= putStrLn
+    tracer mode freq -- reorder/comment out clauses to disable tracing
+      | iter `mod` freq == 0 && mode == "board" = traceStr >>= putStrLn
+      | iter `mod` freq == 0 && mode == "perc" = solvedStr >>= putStrLn
       | True = pure ()
 
     percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
     solvedStr = pure $ ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    -- traceStr = (clear ++) <$> renderWithPositions progress
+    traceStr = (clear ++) <$> renderWithPositions progress
     -- traceStr = ((show iter ++ "\n") ++) <$> renderWithPositions progress
-    traceStr = renderWithPositions progress
+    -- traceStr = renderWithPositions progress
 
 {--- Model ---}
 
