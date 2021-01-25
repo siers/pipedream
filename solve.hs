@@ -218,6 +218,14 @@ traceBoard continue progressNext@Progress{iter, depth, maze=maze@MMaze{board}} =
     -- traceStr = ((show iter ++ "\n") ++) <$> renderWithPositions progress
     -- traceStr = renderWithPositions progress
 
+traceProgress :: Progress -> IO Progress
+traceProgress p@Progress{iter, depth, maze} = do
+  if iter `mod` 100 == 0 then putStrLn solvedStr else pure ()
+  pure p
+  where
+    percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
+    solvedStr = ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
+
 {--- Model ---}
 
 directions = [0, 1, 2, 3]
@@ -345,7 +353,7 @@ solveContinue
     unwindEquate <- mazeEquate maze origin' neighbours
     continuesNext <- continuesNextSorted origin'
 
-    pure $ progress
+    traceProgress $ progress
     -- traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
