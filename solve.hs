@@ -8,7 +8,7 @@ module Main where
 import Control.Lens ((&), (%~), (.~), set, view, _1, _2, _3)
 import Control.Lens.TH
 import Control.Monad.Extra (allM)
-import Control.Monad (join, mplus, mfilter, filterM)
+import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
 import Data.Function (on)
@@ -77,7 +77,7 @@ data Continue = Continue
   , score :: Int
   } deriving Eq
 
-type Unwind = (Cursor, [Cursor])
+type Unwind = [(Cursor, Piece)]
 
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
@@ -119,8 +119,9 @@ dropWhileM p (x:xs) = p x >>= \q -> if q then dropWhileM p xs else return (x:xs)
 
 parse :: String -> IO MMaze
 parse input = do
-  chars <- UV.thaw . UV.fromList . map (\c -> Piece c False (0, 0) False) . join $ rect
-  pure $ MMaze chars (length (head rect)) (length rect)
+  board <- UV.thaw . UV.fromList . map (\c -> Piece c False (0, 0) False) . join $ rect
+  maze <- pure (MMaze board (length (head rect)) (length rect))
+  maze <$ mazeMap maze (\c p -> p { partId = c })
   where rect = filter (not . null) $ lines input
 
 mazeBounded :: MMaze -> Cursor -> Bool
@@ -138,14 +139,22 @@ mazeLists MMaze{board, width, height} = vectorLists width height . UV.convert <$
 mazeCursor :: MMaze -> Int -> Cursor
 mazeCursor MMaze{width} = swap . flip quotRem width
 
-mazeClone :: MMaze -> IO MMaze
-mazeClone m@MMaze{board} = (\b -> m { board = b }) <$> MV.clone board
-
-mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO ()
-mazeModify m@MMaze{board, width} f (x, y) = MV.modify board f (x + y * width)
-
 mazeRead :: MMaze -> Cursor -> IO Piece
 mazeRead MMaze{board, width} (x, y) = MV.read board (x + y * width)
+
+mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO Piece
+mazeModify m@MMaze{board, width} f (x, y) = do
+  p <- MV.read board (x + y * width)
+  MV.write board (x + y * width) (f p)
+  pure p
+
+mazeMap :: MMaze -> (Cursor -> Piece -> Piece) -> IO ()
+mazeMap m@MMaze{board, width, height} f =
+  void .  traverse (\cursor -> mazeModify m (f cursor) cursor) . join $
+    [ [ (x, y) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
+
+mazeClone :: MMaze -> IO MMaze
+mazeClone m@MMaze{board} = (\b -> m { board = b }) <$> MV.clone board
 
 cursorSolved :: MMaze -> Cursor -> IO Bool
 cursorSolved maze = fmap solved . mazeRead maze
@@ -155,13 +164,13 @@ mazeSolve m Continue{char, cursor} = do
   mazeModify m (\p -> p { pipe = char, solved = True, connected = True }) cursor
   mazeRead m cursor
 
-mazeEquate :: MMaze -> Cursor -> Cursor -> IO ()
-mazeEquate m partId = mazeModify m (\p -> p {partId})
+mazeEquate :: MMaze -> PartId -> [Cursor] -> IO Unwind
+mazeEquate m partId cursors = flip traverse cursors $ \cursor ->
+  (cursor, ) <$> mazeModify m (\p -> p { partId, connected = True }) cursor
 
 mazePop :: MMaze -> Unwind -> IO ()
-mazePop m@MMaze{board, width} (cursor, neighbours) = do
-  mazeModify m (\p -> p { solved = False }) cursor
-  (mazeModify m(\p -> p { connected = False })) `traverse_` neighbours
+mazePop m@MMaze{board, width} unwind = do
+  uncurry (flip (mazeModify m . const)) `traverse_` unwind
 
 -- lookup fixed point (ish) in maze by PartId lookup, stops at first cycle
 partEquate :: MMaze -> PartId -> IO PartId
@@ -326,15 +335,16 @@ progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
 pieceDead :: MMaze -> (Continue, [Continue]) -> IO Bool
 pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues) = do
   directDeltas <- filter ((`elem` toPix this) . view _3) <$> mazeDeltas maze cur
-  (mazeSolve maze continue >>= dead directDeltas) <* mazePop maze (cur, [])
+  prev <- mazeRead maze cur
+  partId <- partEquate maze . partId =<< mazeSolve maze continue
+  dead directDeltas partId <* mazePop maze [(cur, prev)]
   where
-    dead :: [PieceDelta] -> Piece -> IO Bool
-    dead directDeltas Piece{partId=partId} = do
-      partIdEquated <- partEquate maze partId
-      allM id $ stuck : map (discontinued partIdEquated) continues
+    dead :: [PieceDelta] -> PartId -> IO Bool
+    dead directDeltas thisPart = do
+      allM id $ stuck : map discontinued continues
       where
         stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
-        discontinued thisPart Continue{cursor=c} = do
+        discontinued Continue{cursor=c} = do
           connected <- (thisPart /=) <$> partEquate maze c
           solved <- cursorSolved maze c
           pure $ not connected || solved
@@ -346,27 +356,24 @@ solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
   progress@Progress{iter, maze=maze@MMaze{board}, continues}
   continue@Continue{cursor=cur, char=this, created, origin} = do
-    piece <- mazeSolve maze continue
+    unwindThis <- mazeRead maze cur
+    mazeSolve maze continue
     deltas <- mazeDeltas maze cur
     directDeltas <- pure . filter ((`elem` toPix this) . view _3) $ deltas
 
-    advance this deltas directDeltas
-  where
-    advance :: Char -> [PieceDelta] -> [PieceDelta] -> IO Progress
-    advance this deltas directDeltas = do
-      (origin':neighbours) <- sort . (++ [origin]) <$> traverse (partEquate maze . (view _2)) directDeltas
-      mazeEquate maze origin' `traverse_` neighbours
-      continuesNext <- continuesNextSorted origin'
+    (origin':neighbours) <- sort . (++ [origin]) <$> traverse (partEquate maze . (view _2)) directDeltas
+    unwindEquate <- mazeEquate maze origin' neighbours
+    continuesNext <- continuesNextSorted origin' deltas
 
-      traceBoard continue $ progress
-        & iterL %~ (+1)
-        & depthL %~ (+1)
-        & continuesL .~ continuesNext
-        & unwindsL %~ ((cur, neighbours) :)
-      where
-        continuesNextSorted origin = do
-          next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) $ deltas
-          dropWhileM (cursorSolved maze . cursor) . sortOn score $ next ++ continues
+    traceBoard continue $ progress
+      & iterL %~ (+1)
+      & depthL %~ (+1)
+      & continuesL .~ continuesNext
+      & unwindsL %~ ((unwindEquate ++ [(cur, unwindThis)]) :)
+  where
+    continuesNextSorted origin deltas = do
+      next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) $ deltas
+      dropWhileM (cursorSolved maze . cursor) . sortOn score $ next ++ continues
 
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Progress -> IO Progress
@@ -376,7 +383,7 @@ solve' progress@Progress{iter, depth, maze, continues=(continue: continues)} = d
   guesses <- filterM (fmap not . pieceDead') . map ((, continues) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  if last then pure progress' else solve' progress'
+  if last then print (iter, depth) *> pure progress' else solve' progress'
   where
     last = depth == mazeSize maze - 1
     pieceDead' = if last then const (pure False) else pieceDead maze
