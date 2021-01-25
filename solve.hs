@@ -330,17 +330,14 @@ progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
 
 pieceDead :: MMaze -> (Continue, [Continue]) -> IO Bool
 pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues) = do
-  directDeltas <- mazeDeltas maze cur (toPix this)
-  dead directDeltas =<< partEquate maze . partId =<< mazeRead maze cur
+  ifM stuck
+    ((\thisPart -> allM (discontinued thisPart) continues) =<< partEquate maze . partId =<< mazeRead maze cur)
+    (pure False)
   where
-    dead :: [PieceDelta] -> PartId -> IO Bool
-    dead directDeltas thisPart = do
-      allM id $ stuck : map discontinued continues
-      where
-        stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
-        discontinued Continue{cursor=c} =
-          if cur == c then pure True else
-            ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze c)
+    stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (toPix this)
+    discontinued thisPart Continue{cursor=c} =
+      if cur == c then pure True else
+        ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze c)
 
 {--- Solver ---}
 
@@ -350,12 +347,10 @@ solveContinue
   progress@Progress{iter, depth, maze=maze@MMaze{board}, continues}
   continue@Continue{cursor=cur, char=this, created, origin, direct} = do
     unwindThis <- mazeSolve maze continue
-    deltas <- mazeDeltas maze cur directions
-
     neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (toPix this))
     (origin':neighbours') <- pure . sort $ origin : neighbours
     unwindEquate <- mazeEquate maze origin' neighbours
-    continuesNext <- continuesNextSorted origin' deltas
+    continuesNext <- continuesNextSorted origin'
 
     pure $ progress
     -- traceBoard continue $ progress
@@ -364,8 +359,8 @@ solveContinue
       & continuesL .~ continuesNext
       & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
   where
-    continuesNextSorted origin deltas = do
-      next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) $ deltas
+    continuesNextSorted origin = do
+      next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) =<< mazeDeltas maze cur directions
       dropWhileM (mazeCursorSolved maze . cursor) . sortOn score $ next ++ continues
 
 -- Solves pieces by backtracking, stops when maze is solved.
