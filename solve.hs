@@ -7,7 +7,7 @@ module Main where
 
 import Control.Lens ((&), (%~), (.~), set, view, _1, _2, _3)
 import Control.Lens.TH
-import Control.Monad.Extra (allM)
+import Control.Monad.Extra (allM, ifM)
 import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
@@ -140,15 +140,15 @@ mazeCursor :: MMaze -> Int -> Cursor
 mazeCursor MMaze{width} = swap . flip quotRem width
 
 mazeRead :: MMaze -> Cursor -> IO Piece
-mazeRead MMaze{board, width} (x, y) = MV.read board (x + y * width)
+mazeRead MMaze{board, width} (x, y) = MV.unsafeRead board (x + y * width)
 
 mazeCursorSolved :: MMaze -> Cursor -> IO Bool
-mazeCursorSolved MMaze{board, width} (x, y) = solved <$> MV.read board (x + y * width)
+mazeCursorSolved MMaze{board, width} (x, y) = solved <$> MV.unsafeRead board (x + y * width)
 
 mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO Piece
 mazeModify m@MMaze{board, width} f (x, y) = do
-  p <- MV.read board (x + y * width)
-  MV.write board (x + y * width) (f p)
+  p <- MV.unsafeRead board (x + y * width)
+  MV.unsafeWrite board (x + y * width) (f p)
   pure p
 
 mazeMap :: MMaze -> (Cursor -> Piece -> Piece) -> IO ()
@@ -330,19 +330,17 @@ progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
 pieceDead :: MMaze -> (Continue, [Continue]) -> IO Bool
 pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues) = do
   directDeltas <- filter ((`elem` toPix this) . view _3) <$> mazeDeltas maze cur
-  prev <- mazeRead maze cur
-  partId <- partEquate maze . partId =<< mazeSolve maze continue
-  dead directDeltas partId <* mazePop maze [(cur, prev)]
+  dead directDeltas =<< partEquate maze . partId =<< mazeRead maze cur
   where
     dead :: [PieceDelta] -> PartId -> IO Bool
     dead directDeltas thisPart = do
       allM id $ stuck : map discontinued continues
       where
         stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
-        discontinued Continue{cursor=c} = do
-          connected <- (thisPart ==) <$> partEquate maze c
-          solved <- mazeCursorSolved maze c
-          pure $ not connected || solved
+        discontinued Continue{cursor=c} =
+          if cur == c
+          then pure True
+          else ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze c)
 
 {--- Solver ---}
 
