@@ -142,6 +142,9 @@ mazeCursor MMaze{width} = swap . flip quotRem width
 mazeRead :: MMaze -> Cursor -> IO Piece
 mazeRead MMaze{board, width} (x, y) = MV.read board (x + y * width)
 
+mazeCursorSolved :: MMaze -> Cursor -> IO Bool
+mazeCursorSolved MMaze{board, width} (x, y) = solved <$> MV.read board (x + y * width)
+
 mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO Piece
 mazeModify m@MMaze{board, width} f (x, y) = do
   p <- MV.read board (x + y * width)
@@ -156,13 +159,9 @@ mazeMap m@MMaze{board, width, height} f =
 mazeClone :: MMaze -> IO MMaze
 mazeClone m@MMaze{board} = (\b -> m { board = b }) <$> MV.clone board
 
-cursorSolved :: MMaze -> Cursor -> IO Bool
-cursorSolved maze = fmap solved . mazeRead maze
-
 mazeSolve :: MMaze -> Continue -> IO Piece
-mazeSolve m Continue{char, cursor} = do
+mazeSolve m Continue{char, cursor} =
   mazeModify m (\p -> p { pipe = char, solved = True }) cursor
-  mazeRead m cursor
 
 mazeEquate :: MMaze -> PartId -> [Cursor] -> IO Unwind
 mazeEquate m partId cursors = flip traverse cursors $ \cursor ->
@@ -342,7 +341,7 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
         stuck = pure $ not . any (not . solved . (view _1)) $ directDeltas
         discontinued Continue{cursor=c} = do
           connected <- (thisPart ==) <$> partEquate maze c
-          solved <- cursorSolved maze c
+          solved <- mazeCursorSolved maze c
           pure $ not connected || solved
 
 {--- Solver ---}
@@ -361,7 +360,8 @@ solveContinue
     unwindEquate <- mazeEquate maze origin' neighbours
     continuesNext <- continuesNextSorted origin' deltas
 
-    traceBoard continue $ progress
+    pure $ progress
+    -- traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
       & continuesL .~ continuesNext
@@ -369,7 +369,7 @@ solveContinue
   where
     continuesNextSorted origin deltas = do
       next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) $ deltas
-      dropWhileM (cursorSolved maze . cursor) . sortOn score $ next ++ continues
+      dropWhileM (mazeCursorSolved maze . cursor) . sortOn score $ next ++ continues
 
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Progress -> IO Progress
