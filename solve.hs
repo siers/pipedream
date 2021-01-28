@@ -369,13 +369,13 @@ solve' :: Progress -> IO Progress
 solve' Progress{continues=[]} = error "unlikely"
 solve' progress@Progress{iter, depth, maze, continues=(continue: continues)} = do
   rotations <- pieceRotations maze (cursor continue)
-  guesses <- filterM (fmap not . pieceDead') . map ((, continues) . ($ continue) . set charL) $ rotations
+  guesses <- filterDead . map ((, continues) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
   if last then print (iter, depth) *> pure progress' else solve' progress'
   where
     last = depth == mazeSize maze - 1
-    pieceDead' = if last then const (pure False) else pieceDead maze
+    filterDead = if last then pure else filterM (fmap not . pieceDead maze)
 
     backtrack :: Progress -> IO (Progress, Continue)
     backtrack Progress{space=[]} = error "unlikely" -- for solvable mazes
