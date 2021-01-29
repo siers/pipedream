@@ -360,9 +360,11 @@ solveContinue
       & continuesL .~ continuesNext
       & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
   where
+    solvedM = mazeCursorSolved maze . cursor
     continuesNextSorted origin = do
       next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) =<< mazeDeltas maze cur directions
-      dropWhileM (mazeCursorSolved maze . cursor) . sortOn score $ next ++ continues
+      next' <- (if iter `mod` 80 == 2 then filterM (fmap not . solvedM) else pure) $ next ++ continues
+      dropWhileM (mazeCursorSolved maze . cursor) . sortOn score $ next'
 
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Progress -> IO Progress
