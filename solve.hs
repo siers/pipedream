@@ -7,14 +7,14 @@ module Main where
 
 import Control.Lens ((&), (%~), (.~), set, view, _1)
 import Control.Lens.TH
-import Control.Monad.Extra (allM, ifM)
+import Control.Monad.Extra (allM, ifM, whenM)
 import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
 import Data.Function (on)
 import Data.List (sort, find, elemIndex)
 import Data.Map (Map, (!))
-import Data.Maybe (fromMaybe, fromJust)
+import Data.Maybe (fromMaybe, fromJust, isNothing)
 import Data.Set (Set)
 import Data.Tuple (swap)
 import Data.Vector.Mutable (MVector)
@@ -25,6 +25,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import System.IO.Unsafe
 import Text.Printf (printf)
+import System.Environment (getEnv, lookupEnv, setEnv)
 
 -- IO
 
@@ -33,7 +34,6 @@ import Data.Text (Text)
 import Network.Socket (withSocketsDo)
 import qualified Data.Text as T
 import qualified Network.WebSockets as WS
-import System.Environment
 
 t a = seq (trace (show a) a) a
 t' l a = seq (trace (show l ++ ": " ++ show a) a) a
@@ -206,10 +206,11 @@ render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 S.empty [] 
 
 traceBoard :: Continue -> Progress -> IO Progress
 traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
-  mode <- fromMaybe "" . lookup "trace" <$> getEnvironment
-  freq <- (read :: String -> Int) . fromMaybe "1" . lookup "freq" <$> getEnvironment
+  mode <- getEnv "trace"
+  freq <- (read :: String -> Int) <$> getEnv "freq"
   tracer mode freq *> pure progress
   where
+
     tracer mode freq -- reorder/comment out clauses to disable tracing
       | iter `mod` freq == 0 && mode == "board" = traceStr >>= putStrLn
       | iter `mod` freq == 0 && mode == "perc" = solvedStr >>= putStrLn
@@ -223,6 +224,7 @@ traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
     traceStr = renderWithPositions (Just current) progress
     -- traceStr = renderWithPositions progress
 
+-- faster, because no env lookups, but just by a little
 traceProgress :: Progress -> IO Progress
 traceProgress p@Progress{iter, depth, maze} = do
   if iter `mod` 100 == 0 then putStrLn solvedStr else pure ()
@@ -358,8 +360,8 @@ solveContinue
     unwindEquate <- mazeEquate maze origin' neighbours
     continuesNext <- continuesNextSorted origin'
 
-    traceProgress $ progress
-    -- traceBoard continue $ progress
+    -- traceProgress $ progress
+    traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
       & continuesL .~ continuesNext
@@ -448,7 +450,10 @@ pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
 
 main :: IO ()
 main = do
-  websocket <- (== "1") . fromMaybe "0" . lookup "websocket" <$> getEnvironment
+  whenM (isNothing <$> lookupEnv "trace") $ setEnv "trace" "-"
+  whenM (isNothing <$> lookupEnv "freq") $ setEnv "freq" "1"
+
+  websocket <- (== "1") . fromMaybe "0" <$> lookupEnv "websocket"
 
   if websocket
   then withSocketsDo $ WS.runClient "maze.server.host" 80 "/game-pipes/" pļāpātArWebsocketu
