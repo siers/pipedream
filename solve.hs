@@ -12,13 +12,15 @@ import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
 import Data.Function (on)
-import Data.List (sort, sortOn, find, uncons, elemIndex)
+import Data.List (sort, find, elemIndex)
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust)
+import Data.Set (Set)
 import Data.Tuple (swap)
 import Data.Vector.Mutable (MVector)
 import Debug.Trace (trace)
 import qualified Data.Map as Map
+import qualified Data.Set as S
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import System.IO.Unsafe
@@ -73,7 +75,7 @@ data Continue = Continue
   , origin :: PartId
   , created :: Int -- created at depth
   , score :: Int
-  } deriving Eq
+  }
 
 type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
@@ -81,8 +83,8 @@ type Unwind = [Unwind1]
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
   , depth :: Int -- number of solves, so also the length of unwinds/space
-  , continues :: [Continue]
-  , space :: [[(Continue, [Continue])]] -- unexplored solution space. enables parallelization. item per choice, per cursor.
+  , continues :: Set Continue -- priority queue for next guesses
+  , space :: [[(Continue, Set Continue)]] -- unexplored solution space. enables parallelization. item per choice, per cursor.
   , unwinds :: [Unwind] -- history, essentially. an item per a solve. pop when (last space == [])
   , maze :: MMaze
   }
@@ -90,10 +92,15 @@ data Progress = Progress
 makeLensesFor ((\n -> (n, n ++ "L")) <$> ["cursor", "char", "choices", "direct", "origin", "created", "score"]) ''Continue
 makeLensesFor ((\n -> (n, n ++ "L")) <$> ["iter", "depth", "continues", "space", "unwinds", "maze"]) ''Progress
 
+instance Eq Continue where
+  Continue{cursor=ca, score=sa} == Continue{cursor=cb, score=sb} = ca == cb && sa == sb
+
+instance Ord Continue where
+  Continue{cursor=ca, score=sa} <= Continue{cursor=cb, score=sb} = sa <= sb --  || ca == cb
+
 instance Show Continue where
   show Continue{cursor, char, direct} =
     fold ["Continue ", filter (/= ' ') [char], show cursor, (if direct then "d" else "u")]
-    -- "Continue " ++ show cursor ++ (if direct then "d" else "u") ++ " from " ++ show origin
 
 instance Show Progress where
   show ps@Progress{iter, continues} =
@@ -177,16 +184,15 @@ partEquateUnsafe m p = unsafePerformIO $ partEquate m p
 
 {--- Rendering, tracing ---}
 
-renderWithPositions :: Progress -> IO String
-renderWithPositions Progress{depth, maze=maze@MMaze{board, width, height}, continues} =
+renderWithPositions :: Maybe Continue -> Progress -> IO String
+renderWithPositions current Progress{depth, maze=maze@MMaze{board, width, height}, continues} =
   unlines . map concat . vectorLists width height . V.imap fmt . V.convert <$> V.freeze board
   where
     colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
     color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash
     colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partEquateUnsafe maze partId) else Nothing
 
-    headSafe l = fst <$> uncons l
-    colorHead cur = printf "\x1b[31m" <$ ((cur ==) `mfilter` (cursor <$> headSafe continues))
+    colorHead cur = printf "\x1b[31m" <$ ((cur ==) `mfilter` (cursor <$> current))
     colorContinues cur = printf "\x1b[32m" <$ find ((cur ==) . cursor) continues
 
     color :: Cursor -> Piece -> Maybe String
@@ -196,15 +202,14 @@ renderWithPositions Progress{depth, maze=maze@MMaze{board, width, height}, conti
       printf $ fromMaybe (pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c pipe) $ color (mazeCursor maze idx) piece
 
 render :: MMaze -> IO ()
-render = (putStrLn =<<) . renderWithPositions . Progress 0 0 [] [] []
+render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 S.empty [] []
 
 traceBoard :: Continue -> Progress -> IO Progress
-traceBoard continue progressNext@Progress{iter, depth, maze=maze@MMaze{board}} = do
+traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
   mode <- fromMaybe "" . lookup "trace" <$> getEnvironment
   freq <- (read :: String -> Int) . fromMaybe "1" . lookup "freq" <$> getEnvironment
-  tracer mode freq *> pure progressNext
+  tracer mode freq *> pure progress
   where
-    progress = progressNext & continuesL %~ (continue:)
     tracer mode freq -- reorder/comment out clauses to disable tracing
       | iter `mod` freq == 0 && mode == "board" = traceStr >>= putStrLn
       | iter `mod` freq == 0 && mode == "perc" = solvedStr >>= putStrLn
@@ -214,8 +219,8 @@ traceBoard continue progressNext@Progress{iter, depth, maze=maze@MMaze{board}} =
     solvedStr = pure $ ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    traceStr = (clear ++) <$> renderWithPositions progress
-    -- traceStr = ((show iter ++ "\n") ++) <$> renderWithPositions progress
+    -- traceStr = (clear ++) <$> renderWithPositions (Just current) progress
+    traceStr = renderWithPositions (Just current) progress
     -- traceStr = renderWithPositions progress
 
 traceProgress :: Progress -> IO Progress
@@ -329,10 +334,10 @@ progressPop :: Progress -> IO Progress
 progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
   (depthL %~ (subtract 1) $ p { unwinds }) <$ mazePop maze unwind
 
-pieceDead :: MMaze -> (Continue, [Continue]) -> IO Bool
+pieceDead :: MMaze -> (Continue, Set Continue) -> IO Bool
 pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues) = do
   ifM stuck
-    ((\thisPart -> allM (discontinued thisPart) continues) =<< partEquate maze . partId =<< mazeRead maze cur)
+    ((\thisPart -> allM (discontinued thisPart) (S.toList continues)) =<< partEquate maze . partId =<< mazeRead maze cur)
     (pure False)
   where
     stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (toPix this)
@@ -362,19 +367,31 @@ solveContinue
   where
     solvedM = mazeCursorSolved maze . cursor
     continuesNextSorted origin = do
-      next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) =<< mazeDeltas maze cur directions
-      next' <- (if iter `mod` 80 == 2 then filterM (fmap not . solvedM) else pure) $ next ++ continues
-      dropWhileM (mazeCursorSolved maze . cursor) . sortOn score $ next'
+      -- next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) =<< mazeDeltas maze cur directions
+      deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
+      next <- traverse (cursorToContinue maze continue { origin }) deltas
+      pure $ foldr (S.insert) continues next
+
+findContinue :: Progress -> IO (Progress, Continue)
+findContinue p@Progress{maze, continues} =
+  ifM (mazeCursorSolved maze cursor)
+    (findContinue p { continues = continues' })
+    (pure (p { continues = continues' }, continue))
+  where
+    (continue@Continue{cursor}, continues') = S.deleteFindMin continues
 
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Progress -> IO Progress
-solve' Progress{continues=[]} = error "unlikely"
-solve' progress@Progress{iter, depth, maze, continues=(continue: continues)} = do
+-- solve' Progress{continues=[]} = error "unlikely"
+solve' progressInit@Progress{iter, depth, maze} = do
+  (progress@Progress{continues}, continue) <- findContinue progressInit
+
   rotations <- pieceRotations maze (cursor continue)
   guesses <- filterDead . map ((, continues) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  if last then print (iter, depth) *> pure progress' else solve' progress'
+  if last then pure progress' else solve' progress'
+  -- if last then print (iter, depth, mazeSize maze - 1, length (space progressInit)) *> pure progress' else solve' progress'
   where
     last = depth == mazeSize maze - 1
     filterDead = if last then pure else filterM (fmap not . pieceDead maze)
@@ -383,10 +400,13 @@ solve' progress@Progress{iter, depth, maze, continues=(continue: continues)} = d
     backtrack Progress{space=[]} = error "unlikely" -- for solvable mazes
     backtrack p@Progress{space=([]:space)} = progressPop p { space } >>= backtrack
     backtrack p@Progress{space=(((continue, continues):guesses):space)} =
-      pure (p { continues = continues, space = guesses : space }, continue)
+      pure (p { continues, space = guesses : space }, continue)
 
 solve :: MMaze -> IO MMaze
-solve = fmap maze . solve' . Progress 0 0 [Continue (0, 0) ' ' 0 True (0, 0) 0 0] [] []
+solve m = do
+  solved@Progress{iter, depth} <- solve' $ Progress 0 0 (S.singleton (Continue (0, 0) ' ' 0 True (0, 0) 0 0)) [] [] m
+  putStrLn (printf "%i/%i, ratio: %f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
+  pure (maze solved)
 
 {--- Main ---}
 

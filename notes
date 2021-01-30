@@ -135,16 +135,21 @@ i: ╸, ╹, ╺, ╻
 2. export mutations to top, so it's easier write the unwind procedure
 
 2021-01-26-22:51:04
-1. try sorting by connectivity in pixValidRotations
-2. continues as set + deleteMin to remove continue sort bottleneck
-3. try out parallel solving
-3.1. by storing a list of Progresses (split space) (can be expensive, because of maze copies)
-3.2. store only best solve of each pixValidRotations (run on new core for limited depth)
-3.3. heuristics: pick only the luckiest (depth vs iteration) OR narrowest (fewest disconnected components)
-3.4. print how many choices do we usually have per-square – is it ever four? (we'd need to combine choices to utilize more cores)
-4. make maze pieces from chars to ints and do direct indexing for caching, but only aftre
-5. see if we can cut down on data in Continue (direct, choices are not necessary, char → int)
-6. see if lookup maps are ever reevaluated due to GC
+• try sorting by connectivity in pixValidRotations
+• continues as set + deleteMin to remove continue sort bottleneck (prev lvl3 ratio: (6131,2499))
+• make maze pieces from chars to ints and do bit matching for validation
+• if any new continues have zero choices, break early
+
+• see if we can directly remove solved continues, without occasional filtering
+• see if pieceDead really has to iterate over every solved
+• see if we can cut down on data in Continue (direct, choices are not necessary, char → int)
+(•) see if lookup maps are ever reevaluated due to GC
+
+p. try out parallel solving
+p.1. by storing a list of Progresses (split space) (can be expensive, because of maze copies)
+p.2. store only best solve of each pixValidRotations (run on new core for limited depth)
+p.3. heuristics: pick only the luckiest (depth vs iteration) OR narrowest (fewest disconnected components)
+p.4. print how many choices do we usually have per-square – is it ever four? (we'd need to combine choices to utilize more cores)
 
 --
 
