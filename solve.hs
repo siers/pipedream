@@ -1,31 +1,34 @@
-{-# LANGUAGE TupleSections, NamedFieldPuns, TemplateHaskell #-}
-{-# LANGUAGE MultiParamTypeClasses, TypeFamilies #-} -- derivingUnbox
+{-# LANGUAGE TupleSections, NamedFieldPuns, TemplateHaskell, BinaryLiterals #-}
 
 module Main where
 
 -- solver
 
-import Control.Lens ((&), (%~), (.~), set, view, _1)
+import Control.Lens ((&), (%~), (.~), set, view, _1, _2)
 import Control.Lens.TH
 import Control.Monad.Extra (allM, ifM, whenM)
 import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
-import Data.Function (on)
 import Data.List (sort, find, elemIndex)
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isNothing)
 import Data.Set (Set)
 import Data.Tuple (swap)
 import Data.Vector.Mutable (MVector)
+import Data.Word (Word8)
 import Debug.Trace (trace)
+import qualified Data.Bits as Bit
 import qualified Data.Map as Map
 import qualified Data.Set as S
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
+import System.Environment (getEnv, lookupEnv, setEnv)
 import System.IO.Unsafe
 import Text.Printf (printf)
-import System.Environment (getEnv, lookupEnv, setEnv)
+
+import Numeric (showIntAtBase)
+import Data.Char (intToDigit)
 
 -- IO
 
@@ -42,7 +45,7 @@ tM = fmap t
 
 type Direction = Int -- top 0, right 1, bottom 2, left 3
 type Rotation = Int
-type Pix = [Direction]
+type Pix = Word8 -- directions as exponents of 2, packed in a byte, mirrored in (shiftL 4) to help bit rotation
 type Cursor = (Int, Int)
 
 -- PartId distinguishes the connected graphs (partitions) by their
@@ -51,7 +54,7 @@ type Cursor = (Int, Int)
 type PartId = Cursor
 
 data Piece = Piece
-  { pipe :: Char
+  { pipe :: Pix
   , solved :: Bool
   , partId :: PartId -- meaningless if not connected
   , connected :: Bool -- connected when pointed
@@ -69,7 +72,7 @@ data MMaze = MMaze -- Mutable Maze
 -- Continues in Progress may turn out to be already solved, which must be checked
 data Continue = Continue
   { cursor :: Cursor
-  , char :: Char -- defaulted to ' ', but set when guessing
+  , char :: Pix -- defaulted to ' ', but set when guessing
   , origin :: PartId
   , created :: Int -- created at depth
   , score :: Int
@@ -98,7 +101,7 @@ instance Ord Continue where
 
 instance Show Continue where
   show Continue{cursor, char} =
-    fold ["Continue ", filter (/= ' ') [char], show cursor]
+    fold ["Continue ", filter (/= ' ') [toChar char], show cursor]
 
 instance Show Progress where
   show ps@Progress{iter, continues} =
@@ -121,7 +124,7 @@ parse input = do
   board <- V.thaw . V.fromList . map (\c -> Piece c False (0, 0) False) . join $ rect
   maze <- pure (MMaze board (length (head rect)) (length rect))
   maze <$ mazeMap maze (\c p -> p { partId = c })
-  where rect = filter (not . null) $ lines input
+  where rect = filter (not . null) . map (map toPix) . lines $ input
 
 mazeBounded :: MMaze -> Cursor -> Bool
 mazeBounded m (x, y) = x >= 0 && y >= 0 && width m > x && height m > y
@@ -197,7 +200,7 @@ renderWithPositions current Progress{depth, maze=maze@MMaze{board, width, height
     color cur piece = colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
 
     fmt idx piece@Piece{pipe} =
-      printf $ fromMaybe (pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c pipe) $ color (mazeCursor maze idx) piece
+      printf $ fromMaybe (toChar pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c (toChar pipe)) $ color (mazeCursor maze idx) piece
 
 render :: MMaze -> IO ()
 render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 S.empty [] []
@@ -225,18 +228,19 @@ traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
 -- faster, because no env lookups, but just by a little
 traceProgress :: Progress -> IO Progress
 traceProgress p@Progress{iter, depth, maze} = do
-  if iter `mod` 100 == 0 then putStrLn solvedStr else pure ()
+  if iter `mod` 1000 == 0 then putStrLn solvedStr else pure ()
   pure p
   where
     percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
-    solvedStr = ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
+    solvedStr = (printf "\x1b[2Ksolved: %0.2f%%\x1b[1A" (percentage * 100 :: Double))
 
 {--- Model ---}
 
 directions = [0, 1, 2, 3]
 rotations = directions
 
-charMapEntries =
+(pixWall, pixUnset) = (0, 0)
+charMapEntries = map (_2 %~ (byteify . bitify))
   [ ('╹', [0])
   , ('┗', [0,1])
   , ('┣', [0,1,2])
@@ -252,10 +256,11 @@ charMapEntries =
   , ('╻', [2])
   , ('┓', [2,3])
   , ('╸', [3])
+  , (' ', []) -- chars outside the map
   ]
-
-(chars, pixs) = unzip charMapEntries
-charsWithSpecial = chars ++ [' '] -- ' ' == wall
+  where
+    bitify = foldr (\exp sum -> 2 ^ exp + sum) 0 . map fromIntegral :: [Direction] -> Pix
+    byteify = (\bitified -> bitified + Bit.shiftL bitified 4) :: Pix -> Pix
 
 charMap :: Map Char Pix
 charMap = Map.fromList charMapEntries
@@ -263,17 +268,22 @@ charMap = Map.fromList charMapEntries
 pixMap :: Map Pix Char
 pixMap = Map.fromList $ map swap charMapEntries
 
-toPix = (charMap !)
-toChar = (pixMap !) . sort
+pixDirections :: Pix -> [Direction]
+pixDirections n = fold
+  [ if n `Bit.testBit` 0 then [0] else []
+  , if n `Bit.testBit` 1 then [1] else []
+  , if n `Bit.testBit` 2 then [2] else []
+  , if n `Bit.testBit` 3 then [3] else []
+  ]
 
-rotateDir :: Int -> Direction -> Direction
-rotateDir n = (`mod` 4) . (+ n) -- C: n=1, CW: n=-1
+toPix = (charMap !) :: Char -> Pix
+toChar = (pixMap !) :: Pix -> Char
+
+showBin :: Integral a => a -> String
+showBin = flip (showIntAtBase 2 intToDigit) "" . fromIntegral
 
 rotate :: Rotation -> Pix -> Pix
-rotate r = map (rotateDir r)
-
-rotateChar :: Rotation -> Char -> Char
-rotateChar r = toChar . rotate r . toPix
+rotate = flip Bit.rotateL
 
 cursorDelta :: Cursor -> Direction -> Cursor
 cursorDelta (x, y) 0 = (x, y - 1)
@@ -295,29 +305,28 @@ mazeDeltasWalls m c =
     fetch (c, d) =
       if mazeBounded m c
       then (, c, d) <$> mazeRead m c
-      else pure (Piece ' ' True (0, 0) True, c, d)
+      else pure (Piece 0 True (0, 0) True, c, d)
 
 {--- Solver bits ---}
 
-pixValid :: (Char, Char, Rotation, Direction) -> Bool
-pixValid (this, that, rotation, direction) = satisfied thisRequires thatRequires
-  where
-    satisfied = (==) `on` filter (rotateDir 2 direction ==) :: Pix -> Pix -> Bool
-    thisRequires = (rotation + 2) `rotate` toPix this :: Pix
-    thatRequires = if that == ' ' then [] else toPix that :: Pix
+-- given current pixel at rotation, does it match the pixel at direction from it?
+pixValid :: (Pix, Pix, Rotation, Direction) -> Bool
+pixValid (this, that, rotation, direction) =
+  not $ (rotate rotation this `Bit.xor` rotate 2 that) `Bit.testBit` direction
 
-pieceRotations :: MMaze -> Cursor -> IO [Char]
+pieceRotations :: MMaze -> Cursor -> IO [Pix]
 pieceRotations maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
   deltas <- mazeDeltasWalls maze cur
-  pure $ map (flip rotateChar this) . filter (validateRotation this deltas) $ directionMap this
+  pure $ map (flip rotate this) . filter (validateRotation this deltas) $ rotationMap this
   where
-    directionMap '╋' = [0]
-    directionMap '┃' = [0,1]
-    directionMap '━' = [0,1]
-    directionMap _ = rotations
+    rotationMap 0b11111111 = [0]
+    rotationMap 0b10101010 = [0,1]
+    rotationMap 0b01010101 = [0,1]
+    rotationMap _ = rotations
 
-    validateRotation this deltas = flip all deltas . validateDirection this
+    validateRotation :: Pix -> [PieceDelta] -> Rotation -> Bool
+    validateRotation this deltas rotation = all (validateDirection this rotation) deltas
 
     validateDirection this rotation (Piece{pipe=that, solved}, _, direction) = do
       not solved || pixValid (this, that, rotation, direction)
@@ -325,10 +334,10 @@ pieceRotations maze@MMaze{board} cur = do
 cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO Continue
 cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) = do
   choices <- length <$> pieceRotations maze c
-  let direct = direction `elem` toPix char
+  let direct = char `Bit.testBit` direction -- possible bug
   let origin' = if direct then origin else c
   let created' = created + 1
-  pure $ Continue c ' ' origin' created' (created' + choices * 5)
+  pure $ Continue c pixUnset origin' created' (created' + choices * 5)
 
 progressPop :: Progress -> IO Progress
 progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
@@ -340,7 +349,7 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
     ((\thisPart -> allM (discontinued thisPart) (S.toList continues)) =<< partEquate maze . partId =<< mazeRead maze cur)
     (pure False)
   where
-    stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (toPix this)
+    stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (pixDirections this)
     discontinued thisPart Continue{cursor=c} =
       if cur == c then pure True else
         ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze c)
@@ -353,13 +362,13 @@ solveContinue
   progress@Progress{iter, depth, maze=maze@MMaze{board}, continues}
   continue@Continue{cursor=cur, char=this, created, origin} = do
     unwindThis <- mazeSolve maze continue
-    neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (toPix this))
+    neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (pixDirections this))
     (origin':neighbours') <- pure . sort $ origin : neighbours
     unwindEquate <- mazeEquate maze origin' neighbours
     continuesNext <- continuesNextSorted origin'
 
-    -- traceProgress $ progress
-    traceBoard continue $ progress
+    traceProgress $ progress
+    -- traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
       & continuesL .~ continuesNext
@@ -404,7 +413,7 @@ solve' progressInit@Progress{iter, depth, maze} = do
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  solved@Progress{iter, depth} <- solve' $ Progress 0 0 (S.singleton (Continue (0, 0) ' ' (0, 0) 0 0)) [] [] m
+  solved@Progress{iter, depth} <- solve' $ Progress 0 0 (S.singleton (Continue (0, 0) pixUnset (0, 0) 0 0)) [] [] m
   putStrLn (printf "%i/%i, ratio: %f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
@@ -425,7 +434,7 @@ rotateStr input solved = concatenate <$> rotations input solved
       zipped <- (V.zip <$> V.freeze input <*> V.freeze solved)
       pure $ V.toList . V.imap (\i (Piece{pipe=p}, Piece{pipe=q}) -> (mazeCursor maze i, rotations p q)) $ zipped
       where
-        rotations from to = fromJust $ to `elemIndex` iterate (rotateChar 1) from
+        rotations from to = fromJust $ to `elemIndex` iterate (rotate 1) from
 
 pļāpātArWebsocketu :: WS.ClientApp ()
 pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
