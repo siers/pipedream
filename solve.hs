@@ -70,8 +70,6 @@ data MMaze = MMaze -- Mutable Maze
 data Continue = Continue
   { cursor :: Cursor
   , char :: Char -- defaulted to ' ', but set when guessing
-  , choices :: Int -- # of valid rotations
-  , direct :: Bool -- directly pointed to from previous continue
   , origin :: PartId
   , created :: Int -- created at depth
   , score :: Int
@@ -99,8 +97,8 @@ instance Ord Continue where
   Continue{cursor=ca, score=sa} <= Continue{cursor=cb, score=sb} = sa <= sb --  || ca == cb
 
 instance Show Continue where
-  show Continue{cursor, char, direct} =
-    fold ["Continue ", filter (/= ' ') [char], show cursor, (if direct then "d" else "u")]
+  show Continue{cursor, char} =
+    fold ["Continue ", filter (/= ' ') [char], show cursor]
 
 instance Show Progress where
   show ps@Progress{iter, continues} =
@@ -330,7 +328,7 @@ cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) =
   let direct = direction `elem` toPix char
   let origin' = if direct then origin else c
   let created' = created + 1
-  pure $ Continue c ' ' choices direct origin' created' (created' + choices * 5)
+  pure $ Continue c ' ' origin' created' (created' + choices * 5)
 
 progressPop :: Progress -> IO Progress
 progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
@@ -353,7 +351,7 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
 solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
   progress@Progress{iter, depth, maze=maze@MMaze{board}, continues}
-  continue@Continue{cursor=cur, char=this, created, origin, direct} = do
+  continue@Continue{cursor=cur, char=this, created, origin} = do
     unwindThis <- mazeSolve maze continue
     neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (toPix this))
     (origin':neighbours') <- pure . sort $ origin : neighbours
@@ -406,7 +404,7 @@ solve' progressInit@Progress{iter, depth, maze} = do
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  solved@Progress{iter, depth} <- solve' $ Progress 0 0 (S.singleton (Continue (0, 0) ' ' 0 True (0, 0) 0 0)) [] [] m
+  solved@Progress{iter, depth} <- solve' $ Progress 0 0 (S.singleton (Continue (0, 0) ' ' (0, 0) 0 0)) [] [] m
   putStrLn (printf "%i/%i, ratio: %f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
