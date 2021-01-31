@@ -151,6 +151,13 @@ p.2. store only best solve of each pixValidRotations (run on new core for limite
 p.3. heuristics: pick only the luckiest (depth vs iteration) OR narrowest (fewest disconnected components)
 p.4. print how many choices do we usually have per-square – is it ever four? (we'd need to combine choices to utilize more cores)
 
+2021-01-31-20:02:24
+Choice count for maze 4-1 in solve' with "print (length rotations)"
+% ghc solve && ./solve samples/4-1 2>&1 | sort | uniq -c | grep -E ' [0123]$'
+    277 0
+  25006 1
+    508 2
+
 --
 
 9f9a4fe
@@ -249,3 +256,13 @@ grep --colour total  0.00s user 0.00s system 0% cpu 4.899 total
 grep --colour total  0.00s user 0.00s system 0% cpu 4.895 total
 ./solve < samples/4 2>&1  4.86s user 0.03s system 99% cpu 4.891 total
 grep --colour total  0.00s user 0.00s system 0% cpu 4.890 total
+
+on fa170bd at 2021-01-31-21:00:28
+% time ./solve samples/4-*
+22060/20000, ratio: 1.103
+24641/20000, ratio: 1.23205
+31466/20000, ratio: 1.5733
+21563/20000, ratio: 1.07815
+22755/20000, ratio: 1.13775
+21087/20000, ratio: 1.05435
+./solve samples/4-*  6.42s user 0.06s system 99% cpu 6.482 total

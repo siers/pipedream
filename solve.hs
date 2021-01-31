@@ -11,7 +11,7 @@ import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
 import Data.Function (on)
-import Data.List (sort, find, elemIndex)
+import Data.List (find, elemIndex)
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isNothing)
 import Data.Set (Set)
@@ -276,6 +276,11 @@ charMap = Map.fromList charMapEntries
 pixMap :: Map Pix Char
 pixMap = Map.fromList $ map swap charMapEntries
 
+pixRotations 0b11111111 = [0]
+pixRotations 0b10101010 = [0,1]
+pixRotations 0b01010101 = [0,1]
+pixRotations _ = rotations
+
 pixDirections :: Pix -> [Direction]
 pixDirections n = fold
   [ if n `Bit.testBit` 0 then [0] else []
@@ -332,12 +337,8 @@ pieceRotations :: MMaze -> Cursor -> IO [Pix]
 pieceRotations maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
   deltas <- mazeDeltasWalls maze cur
-  pure $ map (flip rotate this) . filter (validateRotation this deltas) $ rotationMap this
-  where
-    rotationMap 0b11111111 = [0]
-    rotationMap 0b10101010 = [0,1]
-    rotationMap 0b01010101 = [0,1]
-    rotationMap _ = rotations
+  rotations <- pure . filter (validateRotation this deltas) $ pixRotations this
+  pure . map (flip rotate this) $ rotations
 
 cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO Continue
 cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) = do
@@ -386,7 +387,6 @@ solveContinue
       & continuesL .~ continuesNext
       & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
   where
-    solvedM = mazeCursorSolved maze . cursor
     continuesNextSorted origin = do
       deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
       next <- traverse (cursorToContinue maze continue { origin }) deltas
