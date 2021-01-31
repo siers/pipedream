@@ -345,7 +345,10 @@ cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) =
   let direct = char `Bit.testBit` direction -- possible bug
   let origin' = if direct then origin else c
   let created' = created + 1
-  pure $ Continue c pixUnset origin' created' (created' + choices * 5)
+  -- surprisingly, this if is equivalent to just the else part
+  -- let score = (created' + choices * 10)
+  let score = if choices == 0 then 0 else (created' + choices * 10)
+  pure $ Continue c pixUnset origin' created' score
 
 progressPop :: Progress -> IO Progress
 progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
@@ -376,8 +379,8 @@ solveContinue
 
     continuesNext <- continuesNextSorted origin'
 
-    -- traceProgress $ progress
-    traceBoard continue $ progress
+    traceProgress $ progress
+    -- traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
       & continuesL .~ continuesNext
@@ -466,7 +469,7 @@ rotateStr input solved = concatenate <$> rotations input solved
         rotations from to = fromJust $ to `elemIndex` iterate (rotate 1) from
 
 pļāpātArWebsocketu :: WS.ClientApp ()
-pļāpātArWebsocketu conn = traverse_ solveLevel [3,3..]
+pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
   where
     send = WS.sendTextData conn
     recv = T.unpack <$> WS.receiveData conn
