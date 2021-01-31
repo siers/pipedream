@@ -101,8 +101,8 @@ instance Ord Continue where
   Continue{cursor=ca, score=sa} <= Continue{cursor=cb, score=sb} = sa <= sb --  || ca == cb
 
 instance Show Continue where
-  show Continue{cursor, char} =
-    fold ["Continue ", filter (/= ' ') [toChar char], show cursor]
+  show Continue{cursor, char, origin} =
+    fold ["Continue ", filter (/= ' ') [toChar char], show cursor, " of ", show origin]
 
 instance Show Progress where
   show ps@Progress{iter, continues} =
@@ -148,15 +148,12 @@ mazeRead MMaze{board, width} (x, y) = MV.unsafeRead board (x + y * width)
 mazeCursorSolved :: MMaze -> Cursor -> IO Bool
 mazeCursorSolved MMaze{board, width} (x, y) = solved <$> MV.unsafeRead board (x + y * width)
 
-mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO Piece
-mazeModify m@MMaze{board, width} f (x, y) = do
-  p <- MV.unsafeRead board (x + y * width)
-  MV.unsafeWrite board (x + y * width) (f p)
-  pure p
+mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO ()
+mazeModify m@MMaze{board, width} f (x, y) = MV.unsafeModify board f (x + y * width)
 
 mazeMap :: MMaze -> (Cursor -> Piece -> Piece) -> IO ()
 mazeMap m@MMaze{board, width, height} f =
-  void .  traverse (\cursor -> mazeModify m (f cursor) cursor) . join $
+  void . traverse (\cursor -> mazeModify m (f cursor) cursor) . join $
     [ [ (x, y) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
 mazeClone :: MMaze -> IO MMaze
@@ -164,11 +161,12 @@ mazeClone m@MMaze{board} = (\board -> m { board }) <$> MV.clone board
 
 mazeSolve :: MMaze -> Continue -> IO Unwind1
 mazeSolve m Continue{char, cursor} =
-  (cursor, ) <$> mazeModify m (\p -> p { pipe = char, solved = True }) cursor
+  (cursor, ) <$> mazeRead m cursor <* mazeModify m (\p -> p { pipe = char, solved = True }) cursor
 
-mazeEquate :: MMaze -> PartId -> Cursor -> IO Unwind1
-mazeEquate m partId cursor =
-  (cursor, ) <$> mazeModify m (\p -> p { partId, connected = True }) cursor
+mazeEquate :: MMaze -> PartId -> [Cursor] -> IO Unwind
+mazeEquate m partId cursors =
+  traverse (\c -> (c, ) <$> mazeRead m c) cursors
+  <* traverse (mazeModify m (\p -> p { partId, connected = True })) cursors
 
 mazePop :: MMaze -> Unwind -> IO ()
 mazePop m@MMaze{board, width} unwind = do
@@ -217,7 +215,6 @@ traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
   freq <- (read :: String -> Int) <$> getEnv "freq"
   tracer mode freq *> pure progress
   where
-
     tracer mode freq -- reorder/comment out clauses to disable tracing
       | iter `mod` freq == 0 && mode == "board" = traceStr >>= putStrLn
       | iter `mod` freq == 0 && mode == "perc" = solvedStr >>= putStrLn
@@ -226,9 +223,11 @@ traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
     percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
     solvedStr = pure $ ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
 
+    stats = (show iter ++ "/" ++ show depth ++ " at " ++ show (cursor current) ++ "\n")
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    -- traceStr = (clear ++) <$> renderWithPositions (Just current) progress
-    traceStr = renderWithPositions (Just current) progress
+    traceStr = (clear ++) <$> renderWithPositions (Just current) progress
+    -- traceStr = (stats ++) <$> renderWithPositions (Just current) progress
+    -- traceStr = renderWithPositions (Just current) progress
     -- traceStr = renderWithPositions progress
 
 -- faster, because no env lookups, but just by a little
@@ -351,9 +350,8 @@ progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
 
 pieceDead :: MMaze -> (Continue, Set Continue) -> IO Bool
 pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues) = do
-  ifM stuck
-    ((\thisPart -> allM (discontinued thisPart) (S.toList continues)) =<< partEquate maze . partId =<< mazeRead maze cur)
-    (pure False)
+  thisPart <- partEquate maze . partId =<< mazeRead maze cur
+  allM id $ stuck : map (discontinued thisPart) (S.toList continues)
   where
     stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (pixDirections this)
     discontinued thisPart Continue{cursor=c} =
@@ -368,9 +366,11 @@ solveContinue
   progress@Progress{iter, depth, maze=maze@MMaze{board}, continues}
   continue@Continue{cursor=cur, char=this, created, origin} = do
     unwindThis <- mazeSolve maze continue
+
     neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (pixDirections this))
     (origin':neighbours') <- pure . sort $ origin : neighbours
-    unwindEquate <- traverse (mazeEquate maze origin') neighbours
+    unwindEquate <- mazeEquate maze origin' neighbours
+
     continuesNext <- continuesNextSorted origin'
 
     -- traceProgress $ progress
@@ -402,14 +402,13 @@ solve' progressInit@Progress{iter, depth, maze} = do
   (progress@Progress{continues}, continue) <- findContinue progressInit
 
   rotations <- pieceRotations maze (cursor continue)
-  guesses <- filterDead . map ((, continues) . ($ continue) . set charL) $ rotations
+  guesses <- removeDead . map ((, continues) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  if last then pure progress' else solve' progress'
-  -- if last then print (iter, depth, mazeSize maze - 1, length (space progressInit)) *> pure progress' else solve' progress'
+  (if last then pure else solve') progress'
   where
     last = depth == mazeSize maze - 1
-    filterDead = if last then pure else filterM (fmap not . pieceDead maze)
+    removeDead = if last then pure else filterM (fmap not . pieceDead maze)
 
     backtrack :: Progress -> IO (Progress, Continue)
     backtrack Progress{space=[]} = error "unlikely" -- for solvable mazes
@@ -419,7 +418,8 @@ solve' progressInit@Progress{iter, depth, maze} = do
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  solved@Progress{iter, depth} <- solve' $ Progress 0 0 (S.singleton (Continue (0, 0) pixUnset (0, 0) 0 0)) [] [] m
+  solved@Progress{iter, depth} <- solve' $
+    Progress 0 0 (S.singleton (Continue (0, 0) pixUnset (0, 0) 0 0)) [] [] m
   putStrLn (printf "%i/%i, ratio: %f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
@@ -464,7 +464,7 @@ rotateStr input solved = concatenate <$> rotations input solved
         rotations from to = fromJust $ to `elemIndex` iterate (rotate 1) from
 
 pļāpātArWebsocketu :: WS.ClientApp ()
-pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
+pļāpātArWebsocketu conn = traverse_ solveLevel [3,3..]
   where
     send = WS.sendTextData conn
     recv = T.unpack <$> WS.receiveData conn
@@ -491,5 +491,7 @@ main = do
 
   if websocket
   then withSocketsDo $ WS.runClient "maze.server.host" 80 "/game-pipes/" pļāpātArWebsocketu
-  else putStrLn . show =<< verify =<< solve =<< parse =<< getContents
-  -- else render =<< solve =<< parse =<< getContents
+  else do
+    solve <- solve =<< parse =<< getContents
+    render solve
+    whenM (not <$> verify solve) (putStrLn "solution invalid")
