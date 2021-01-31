@@ -10,6 +10,7 @@ import Control.Monad.Extra (allM, ifM, whenM)
 import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
+import Data.Function (on)
 import Data.List (sort, find, elemIndex)
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isNothing)
@@ -452,15 +453,13 @@ rotateStr input solved = concatenate <$> rotations input solved
   where
     concatenate :: [(Cursor, Rotation)] -> Text
     concatenate =
-      (T.pack "rotate " <>)
-      . T.intercalate (T.pack "\n")
-      . map (\(x, y) -> T.pack $ show x ++ " " ++ show y)
-      . (>>= (\((x, y), r) -> take r (repeat (x, y))))
+      (T.pack "rotate " <>) . T.intercalate (T.pack "\n")
+      . (>>= (\((x, y), r) -> replicate r (T.pack (printf "%i %i" x y))))
 
     rotations :: MMaze -> MMaze -> IO [(Cursor, Rotation)]
     rotations maze@MMaze{board=input, width, height} MMaze{board=solved} = do
-      zipped <- (V.zip <$> V.freeze input <*> V.freeze solved)
-      pure $ V.toList . V.imap (\i (Piece{pipe=p}, Piece{pipe=q}) -> (mazeCursor maze i, rotations p q)) $ zipped
+      V.toList . V.imap (\i -> (mazeCursor maze i, ) . uncurry (rotations `on` pipe))
+      <$> (V.zip <$> V.freeze input <*> V.freeze solved)
       where
         rotations from to = fromJust $ to `elemIndex` iterate (rotate 1) from
 
