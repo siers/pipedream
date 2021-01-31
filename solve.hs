@@ -159,14 +159,14 @@ mazeMap m@MMaze{board, width, height} f =
     [ [ (x, y) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
 mazeClone :: MMaze -> IO MMaze
-mazeClone m@MMaze{board} = (\b -> m { board = b }) <$> MV.clone board
+mazeClone m@MMaze{board} = (\board -> m { board }) <$> MV.clone board
 
 mazeSolve :: MMaze -> Continue -> IO Unwind1
 mazeSolve m Continue{char, cursor} =
   (cursor, ) <$> mazeModify m (\p -> p { pipe = char, solved = True }) cursor
 
-mazeEquate :: MMaze -> PartId -> [Cursor] -> IO Unwind
-mazeEquate m partId cursors = flip traverse cursors $ \cursor ->
+mazeEquate :: MMaze -> PartId -> Cursor -> IO Unwind1
+mazeEquate m partId cursor =
   (cursor, ) <$> mazeModify m (\p -> p { partId, connected = True }) cursor
 
 mazePop :: MMaze -> Unwind -> IO ()
@@ -204,6 +204,11 @@ renderWithPositions current Progress{depth, maze=maze@MMaze{board, width, height
 
 render :: MMaze -> IO ()
 render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 S.empty [] []
+
+renderStr :: MMaze -> IO String
+renderStr MMaze{board, width, height} = do
+  unlines . map concat . vectorLists width height . V.map (return . toChar . pipe) . V.convert
+  <$> V.freeze board
 
 traceBoard :: Continue -> Progress -> IO Progress
 traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
@@ -314,6 +319,12 @@ pixValid :: (Pix, Pix, Rotation, Direction) -> Bool
 pixValid (this, that, rotation, direction) =
   not $ (rotate rotation this `Bit.xor` rotate 2 that) `Bit.testBit` direction
 
+validateRotation :: Pix -> [PieceDelta] -> Rotation -> Bool
+validateRotation this deltas rotation = all (validateDirection this rotation) deltas
+  where
+    validateDirection this rotation (Piece{pipe=that, solved}, _, direction) = do
+      not solved || pixValid (this, that, rotation, direction)
+
 pieceRotations :: MMaze -> Cursor -> IO [Pix]
 pieceRotations maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
@@ -324,12 +335,6 @@ pieceRotations maze@MMaze{board} cur = do
     rotationMap 0b10101010 = [0,1]
     rotationMap 0b01010101 = [0,1]
     rotationMap _ = rotations
-
-    validateRotation :: Pix -> [PieceDelta] -> Rotation -> Bool
-    validateRotation this deltas rotation = all (validateDirection this rotation) deltas
-
-    validateDirection this rotation (Piece{pipe=that, solved}, _, direction) = do
-      not solved || pixValid (this, that, rotation, direction)
 
 cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO Continue
 cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) = do
@@ -364,11 +369,11 @@ solveContinue
     unwindThis <- mazeSolve maze continue
     neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (pixDirections this))
     (origin':neighbours') <- pure . sort $ origin : neighbours
-    unwindEquate <- mazeEquate maze origin' neighbours
+    unwindEquate <- traverse (mazeEquate maze origin') neighbours
     continuesNext <- continuesNextSorted origin'
 
-    traceProgress $ progress
-    -- traceBoard continue $ progress
+    -- traceProgress $ progress
+    traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
       & continuesL .~ continuesNext
@@ -417,6 +422,29 @@ solve m = do
   putStrLn (printf "%i/%i, ratio: %f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
+verify :: MMaze -> IO Bool
+verify maze = do
+  (mazeSize maze ==) <$> partFollow maze S.empty [(0, 0)]
+  where
+    partFollow :: MMaze -> Set Cursor -> [Cursor] -> IO Int
+    partFollow maze visited [] = pure (S.size visited)
+    partFollow maze visited (cursor:next) = do
+      this <- pipe <$> mazeRead maze cursor
+      valid <- validateRotation this <$> mazeDeltasWalls maze cursor <*> pure 0
+      if not valid
+      then pure (S.size visited)
+      else do
+        deltas <- mazeDeltas maze cursor (pixDirections this)
+        deltas' <- filter (not . flip S.member visited) . map (view _2) <$> pure deltas
+        partFollow maze (S.insert cursor visited) (deltas' ++ next)
+
+storeBad :: Int -> MMaze -> MMaze -> IO MMaze
+storeBad level original solved = do
+  whenM (fmap not . verify =<< mazeClone solved) $ do
+    putStrLn ("storing bad level " ++ show level ++ " solve")
+    (writeFile ("samples/bad-" ++ show level) =<< renderStr original)
+  pure solved
+
 {--- Main ---}
 
 rotateStr :: MMaze -> MMaze -> IO Text
@@ -449,7 +477,7 @@ pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
       send (T.pack "map")
       maze <- parse . T.unpack . T.drop 5 =<< WS.receiveData conn
 
-      send =<< rotateStr maze =<< solve =<< mazeClone maze
+      send =<< rotateStr maze =<< storeBad level maze =<< solve =<< mazeClone maze
       recv
 
       send (T.pack "verify")
@@ -464,4 +492,5 @@ main = do
 
   if websocket
   then withSocketsDo $ WS.runClient "maze.server.host" 80 "/game-pipes/" pļāpātArWebsocketu
-  else render =<< solve =<< parse =<< getContents
+  else putStrLn . show =<< verify =<< solve =<< parse =<< getContents
+  -- else render =<< solve =<< parse =<< getContents
