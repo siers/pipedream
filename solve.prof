@@ -1,0 +1,251 @@
+	Mon Feb  1 00:00 2021 Time and Allocation Profiling Report  (Final)
+
+	   solve +RTS -p -RTS samples/4-1 samples/4-2 samples/4-3 samples/4-4 samples/4-5 samples/4-6
+
+	total time  =        3.13 secs   (3127 ticks @ 1000 us, 1 processor)
+	total alloc = 4,001,538,008 bytes  (excludes profiling overheads)
+
+COST CENTRE                       MODULE              SRC                                  %time %alloc
+
+mazeRead                          Main                solve.hs:149:1-73                     10.7   12.4
+mazeCursorSolved                  Main                solve.hs:152:1-92                      8.3   11.7
+pieceRotationCount                Main                solve.hs:(352,1)-(354,95)              7.4    8.5
+solveContinue.continuesNextSorted Main                solve.hs:(403,5)-(406,44)              6.3    3.3
+ifM                               Control.Monad.Extra src/Control/Monad/Extra.hs:195:1-41    5.0    4.5
+mazeBounded                       Main                solve.hs:134:1-70                      5.0    4.6
+solveContinue                     Main                solve.hs:(385,1)-(406,44)              4.9    3.1
+mazeDeltas                        Main                solve.hs:(315,1)-(318,66)              4.5    5.0
+pieceDead.discontinued            Main                solve.hs:(377,5)-(379,92)              3.9    5.1
+pieceRotations                    Main                solve.hs:(346,1)-(349,43)              3.7    4.4
+verify.partFollow                 Main                solve.hs:(449,5)-(458,67)              3.4    2.6
+partEquate                        Main                solve.hs:(180,1)-(183,94)              2.9    2.8
+solve'                            Main                solve.hs:(419,1)-(435,63)              2.8    2.0
+mazeModify                        Main                solve.hs:155:1-83                      2.8    2.3
+partEquate.find                   Main                solve.hs:182:5-95                      2.4    3.4
+pieceDead                         Main                solve.hs:(372,1)-(379,92)              2.2    5.4
+allM                              Control.Monad.Extra src/Control/Monad/Extra.hs:235:1-38    2.2    2.6
+partEquate.loop'.\                Main                solve.hs:183:27-81                     2.2    1.6
+cursorDelta                       Main                solve.hs:(308,1)-(312,60)              2.1    1.7
+pixDirections                     Main                solve.hs:(291,1)-(296,3)               2.1    1.3
+==                                Main                solve.hs:98:3-87                       1.6    1.4
+rotate                            Main                solve.hs:305:1-25                      1.5    0.5
+partEquate.loop'                  Main                solve.hs:183:5-94                      1.4    1.6
+mazeEquate                        Main                solve.hs:(170,1)-(172,75)              1.3    1.3
+pixRotations                      Main                solve.hs:(285,1)-(288,26)              1.2    0.5
+
+
+                                                                                                                                                individual      inherited
+COST CENTRE                             MODULE                            SRC                                                no.     entries  %time %alloc   %time %alloc
+
+MAIN                                    MAIN                              <built-in>                                         338          0    0.0    0.0   100.0  100.0
+ CAF                                    Main                              <entire-module>                                    675          0    0.0    0.0     0.0    0.0
+  charMap                               Main                              solve.hs:280:1-37                                  718          1    0.0    0.0     0.0    0.0
+  charMapEntries                        Main                              solve.hs:(257,1)-(277,75)                          719          1    0.0    0.0     0.0    0.0
+   charMapEntries.bitify                Main                              solve.hs:276:5-89                                  722          1    0.0    0.0     0.0    0.0
+    charMapEntries.bitify.\             Main                              solve.hs:276:33-45                                 723         32    0.0    0.0     0.0    0.0
+   charMapEntries.byteify               Main                              solve.hs:277:5-75                                  720          1    0.0    0.0     0.0    0.0
+    charMapEntries.byteify.\            Main                              solve.hs:277:29-60                                 721         15    0.0    0.0     0.0    0.0
+  directions                            Main                              solve.hs:253:1-25                                  725          1    0.0    0.0     0.0    0.0
+  main                                  Main                              solve.hs:(509,1)-(517,95)                          676          1    0.0    0.0     0.0    0.0
+   whenM                                Control.Monad.Extra               src/Control/Monad/Extra.hs:187:1-29                678          2    0.0    0.0     0.0    0.0
+    ifM                                 Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                679          2    0.0    0.0     0.0    0.0
+  rotate                                Main                              solve.hs:305:1-25                                  728          1    0.0    0.0     0.0    0.0
+  rotations                             Main                              solve.hs:254:1-22                                  724          1    0.0    0.0     0.0    0.0
+  toPix                                 Main                              solve.hs:298:1-34                                  716          1    0.0    0.0     0.0    0.0
+ CAF                                    GHC.Conc.Signal                   <entire-module>                                    444          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.Float                         <entire-module>                                    435          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.IO.Encoding                   <entire-module>                                    425          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.IO.Encoding.Iconv             <entire-module>                                    423          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.IO.Exception                  <entire-module>                                    417          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.IO.FD                         <entire-module>                                    416          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.IO.Handle.FD                  <entire-module>                                    414          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.IO.Handle.Internals           <entire-module>                                    413          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.IO.Handle.Text                <entire-module>                                    412          0    0.0    0.0     0.0    0.0
+ CAF                                    GHC.TopHandler                    <entire-module>                                    388          0    0.0    0.0     0.0    0.0
+ CAF                                    Text.Printf                       <entire-module>                                    375          0    0.0    0.0     0.0    0.0
+ CAF                                    Text.Read.Lex                     <entire-module>                                    373          0    0.0    0.0     0.0    0.0
+ main                                   Main                              solve.hs:(509,1)-(517,95)                          677          0    0.0    0.0   100.0  100.0
+  solveFiles                            Main                              solve.hs:(504,1)-(506,60)                          683          2    0.0    0.0   100.0  100.0
+   parse                                Main                              solve.hs:(124,1)-(128,68)                          684          2    0.1    0.2     1.4    1.3
+    unId                                Data.Vector.Fusion.Util           Data/Vector/Fusion/Util.hs:25:21-24                685      40004    0.0    0.0     0.0    0.0
+    marray#                             Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    690      40002    0.0    0.0     0.0    0.0
+    parse.\                             Main                              solve.hs:125:45-70                                 706      37779    0.0    0.0     0.0    0.0
+    mazeMap                             Main                              solve.hs:(158,1)-(160,63)                          691          2    0.1    0.4     0.8    0.9
+     mazeMap.\                          Main                              solve.hs:159:31-60                                 692      40000    0.0    0.1     0.6    0.5
+      mazeModify                        Main                              solve.hs:155:1-83                                  693      40000    0.5    0.4     0.6    0.5
+       marray#                          Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    694      80000    0.0    0.0     0.0    0.0
+       parse.\                          Main                              solve.hs:127:33-48                                 705      37779    0.1    0.0     0.1    0.0
+    parse.rect                          Main                              solve.hs:128:9-68                                  689          2    0.1    0.2     0.6    0.2
+     toPix                              Main                              solve.hs:298:1-34                                  717          0    0.4    0.0     0.4    0.0
+    sChunks                             Data.Vector.Fusion.Bundle.Monadic Data/Vector/Fusion/Bundle/Monadic.hs:122:30-36     688          2    0.0    0.0     0.0    0.0
+    sSize                               Data.Vector.Fusion.Bundle.Monadic Data/Vector/Fusion/Bundle/Monadic.hs:124:30-34     687          2    0.0    0.0     0.0    0.0
+    upperBound                          Data.Vector.Fusion.Bundle.Size    Data/Vector/Fusion/Bundle/Size.hs:(126,1)-(128,30) 686          2    0.0    0.0     0.0    0.0
+   solve                                Main                              solve.hs:(438,1)-(442,20)                          695          2    0.0    0.0    92.3   92.8
+    solve'                              Main                              solve.hs:(419,1)-(435,63)                          696      40784    2.8    2.0    92.3   92.8
+     findContinue                       Main                              solve.hs:(409,1)-(414,71)                          697      72603    0.4    0.6     2.1    2.0
+      findContinue.(...)                Main                              solve.hs:414:5-71                                  701      72603    0.3    0.6     0.3    0.6
+      findContinue.cursor               Main                              solve.hs:414:5-71                                  700      72603    0.0    0.0     0.0    0.0
+      ifM                               Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                698      72603    0.4    0.1     0.6    0.2
+       mazeCursorSolved                 Main                              solve.hs:152:1-92                                  702          0    0.1    0.1     0.2    0.1
+        solved                          Main                              solve.hs:59:5-10                                   704      72603    0.1    0.0     0.1    0.0
+      mazeCursorSolved                  Main                              solve.hs:152:1-92                                  699      72603    0.7    0.6     0.7    0.6
+       marray#                          Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    703      72603    0.0    0.0     0.0    0.0
+      findContinue.continues'           Main                              solve.hs:414:5-71                                  803      72384    0.1    0.0     0.1    0.0
+      findContinue.continue             Main                              solve.hs:414:5-71                                  710      40784    0.0    0.0     0.0    0.0
+     solve'.backtrack                   Main                              solve.hs:(432,5)-(435,63)                          761      44038    0.1    0.2     0.4    0.5
+      progressPop                       Main                              solve.hs:(368,1)-(369,65)                          838       3255    0.0    0.0     0.3    0.3
+       mazePop                          Main                              solve.hs:(175,1)-(176,58)                          839       3255    0.2    0.1     0.2    0.2
+        mazeModify                      Main                              solve.hs:155:1-83                                  840      13043    0.0    0.1     0.0    0.1
+         marray#                        Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    841      26086    0.0    0.0     0.0    0.0
+     cursor                             Main                              solve.hs:75:5-10                                   709      40784    0.0    0.0     0.0    0.0
+     pieceRotations                     Main                              solve.hs:(346,1)-(349,43)                          707      40784    3.7    4.4     7.2    7.1
+      mazeRead                          Main                              solve.hs:149:1-73                                  708     202712    1.5    1.1     1.5    1.1
+       marray#                          Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    711     202712    0.0    0.0     0.0    0.0
+      cursorDelta                       Main                              solve.hs:(308,1)-(312,60)                          727     163046    0.4    0.3     0.4    0.3
+      mazeBounded                       Main                              solve.hs:134:1-70                                  726     163046    0.9    1.0     0.9    1.0
+       width                            Main                              solve.hs:68:5-9                                    730     162431    0.0    0.0     0.0    0.0
+       height                           Main                              solve.hs:69:5-10                                   731     162295    0.0    0.0     0.0    0.0
+      pixRotations                      Main                              solve.hs:(285,1)-(288,26)                          715      40783    0.2    0.2     0.2    0.2
+      rotate                            Main                              solve.hs:305:1-25                                  729          0    0.5    0.2     0.5    0.2
+     solve'.last                        Main                              solve.hs:428:5-37                                  713      40784    0.3    0.1     0.4    0.1
+      mazeSize                          Main                              solve.hs:137:1-46                                  714      40784    0.1    0.0     0.1    0.0
+     solve'.removeDead                  Main                              solve.hs:429:5-75                                  712      40784    0.8    0.5    33.1   43.4
+      pieceDead                         Main                              solve.hs:(372,1)-(379,92)                          732      40982    2.2    5.4    32.3   42.8
+       pieceDead.discontinued           Main                              solve.hs:(377,5)-(379,92)                          814    1325930    2.9    4.8    11.9   21.8
+        ifM                             Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                815    1324004    0.9    2.1     0.9    2.1
+        mazeCursorSolved                Main                              solve.hs:152:1-92                                  819    1324004    5.8   10.1     5.8   10.1
+         marray#                        Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    821    1324004    0.0    0.0     0.0    0.0
+        partEquate                      Main                              solve.hs:(180,1)-(183,94)                          823     377626    0.7    2.0     2.4    4.8
+         partEquate.find                Main                              solve.hs:182:5-95                                  825     377626    0.4    0.8     1.7    2.9
+          mazeRead                      Main                              solve.hs:149:1-73                                  827     377626    1.3    2.0     1.3    2.0
+           marray#                      Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    830     377626    0.0    0.0     0.0    0.0
+       allM                             Control.Monad.Extra               src/Control/Monad/Extra.hs:235:1-38                746      40982    1.9    2.3    14.2   12.6
+        &&^                             Control.Monad.Extra               src/Control/Monad/Extra.hs:219:1-32                747    1366912    0.3    0.9    12.0   10.3
+         ifM                            Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                748    1366912    3.6    2.2    11.7    9.5
+          pieceDead.discontinued        Main                              solve.hs:(377,5)-(379,92)                          818          0    1.0    0.3     8.2    7.3
+           mazeCursorSolved             Main                              solve.hs:152:1-92                                  820          0    1.7    1.1     2.1    1.1
+            solved                      Main                              solve.hs:59:5-10                                   822    1324004    0.4    0.0     0.4    0.0
+           partEquate                   Main                              solve.hs:(180,1)-(183,94)                          824          0    1.1    0.0     5.1    5.9
+            partEquate.find             Main                              solve.hs:182:5-95                                  826     402520    0.7    1.2     2.2    3.4
+             mazeRead                   Main                              solve.hs:149:1-73                                  831     402520    1.4    2.2     1.4    2.2
+              marray#                   Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    835     402520    0.0    0.0     0.0    0.0
+             partEquate.find.\          Main                              solve.hs:182:44-74                                 834     377626    0.0    0.0     0.0    0.0
+            partEquate.loop'            Main                              solve.hs:183:5-94                                  832     402520    0.7    1.1     1.8    2.6
+             partEquate.loop'.\         Main                              solve.hs:183:27-81                                 837     402520    0.8    1.1     0.8    1.1
+             partEquate.find            Main                              solve.hs:182:5-95                                  833          0    0.2    0.3     0.3    0.3
+              partEquate.find.\         Main                              solve.hs:182:44-74                                 843     126501    0.0    0.0     0.0    0.0
+              mazeRead                  Main                              solve.hs:149:1-73                                  836          0    0.1    0.0     0.1    0.0
+          pieceDead.stuck               Main                              solve.hs:376:5-85                                  755          0    0.0    0.0     0.0    0.0
+        solved                          Main                              solve.hs:59:5-10                                   760      60074    0.1    0.0     0.1    0.0
+        pieceDead.discontinued          Main                              solve.hs:(377,5)-(379,92)                          816          0    0.0    0.0     0.2    0.0
+         ifM                            Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                817          0    0.2    0.0     0.2    0.0
+        pieceDead.stuck                 Main                              solve.hs:376:5-85                                  754          0    0.0    0.0     0.0    0.0
+       mazeRead                         Main                              solve.hs:149:1-73                                  733      40982    0.3    0.2     0.3    0.2
+        marray#                         Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    734      40982    0.0    0.0     0.0    0.0
+       partEquate                       Main                              solve.hs:(180,1)-(183,94)                          735      40982    0.5    0.2     2.1    1.2
+        partEquate.loop'                Main                              solve.hs:183:5-94                                  740      42678    0.4    0.1     1.2    0.6
+         partEquate.find                Main                              solve.hs:182:5-95                                  741      42678    0.2    0.1     0.3    0.4
+          mazeRead                      Main                              solve.hs:149:1-73                                  742      42678    0.2    0.2     0.2    0.2
+           marray#                      Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    744      42678    0.0    0.0     0.0    0.0
+          partEquate.find.\             Main                              solve.hs:182:44-74                                 844       9080    0.0    0.0     0.0    0.0
+         partEquate.loop'.\             Main                              solve.hs:183:27-81                                 745      42678    0.5    0.1     0.5    0.1
+        partEquate.find                 Main                              solve.hs:182:5-95                                  736      40982    0.2    0.1     0.4    0.3
+         mazeRead                       Main                              solve.hs:149:1-73                                  737      40982    0.2    0.2     0.2    0.2
+          marray#                       Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    739      40982    0.0    0.0     0.0    0.0
+         partEquate.find.\              Main                              solve.hs:182:44-74                                 743      40982    0.0    0.0     0.0    0.0
+       partId                           Main                              solve.hs:60:5-10                                   738      40982    0.0    0.0     0.0    0.0
+       pieceDead.stuck                  Main                              solve.hs:376:5-85                                  749      40982    0.2    0.3     1.6    1.6
+        allM                            Control.Monad.Extra               src/Control/Monad/Extra.hs:235:1-38                750      40982    0.3    0.3     0.7    0.9
+         &&^                            Control.Monad.Extra               src/Control/Monad/Extra.hs:219:1-32                752      60074    0.0    0.1     0.1    0.2
+          ifM                           Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                753      60074    0.0    0.1     0.0    0.1
+         cursorDelta                    Main                              solve.hs:(308,1)-(312,60)                          757      60074    0.1    0.1     0.1    0.1
+         mazeRead                       Main                              solve.hs:149:1-73                                  756      60074    0.3    0.3     0.3    0.3
+          marray#                       Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    758      60074    0.0    0.0     0.0    0.0
+        pixDirections                   Main                              solve.hs:(291,1)-(296,3)                           751      40982    0.7    0.5     0.7    0.5
+     solveContinue                      Main                              solve.hs:(385,1)-(406,44)                          762      40783    4.9    3.1    46.3   37.9
+      partEquate                        Main                              solve.hs:(180,1)-(183,94)                          768     122370    0.6    0.6     3.9    3.7
+       partEquate.loop'                 Main                              solve.hs:183:5-94                                  772     143635    0.4    0.4     2.3    2.0
+        partEquate.find                 Main                              solve.hs:182:5-95                                  773     143635    0.3    0.4     1.0    1.2
+         mazeRead                       Main                              solve.hs:149:1-73                                  774     143635    0.6    0.8     0.6    0.8
+          marray#                       Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    777     143635    0.0    0.0     0.0    0.0
+         partEquate.find.\              Main                              solve.hs:182:44-74                                 842      79357    0.0    0.0     0.0    0.0
+        partEquate.loop'.\              Main                              solve.hs:183:27-81                                 778     143635    0.9    0.4     0.9    0.4
+       partEquate.find                  Main                              solve.hs:182:5-95                                  769     122370    0.4    0.4     1.0    1.0
+        mazeRead                        Main                              solve.hs:149:1-73                                  770     122370    0.6    0.7     0.6    0.7
+         marray#                        Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    771     122370    0.0    0.0     0.0    0.0
+        partEquate.find.\               Main                              solve.hs:182:44-74                                 776     122370    0.0    0.0     0.0    0.0
+      cursorDelta                       Main                              solve.hs:(308,1)-(312,60)                          780      81587    0.1    0.1     0.1    0.1
+      mazeEquate                        Main                              solve.hs:(170,1)-(172,75)                          781      40783    1.3    1.3     3.7    3.7
+       mazeEquate.\                     Main                              solve.hs:171:19-40                                 782     122370    0.1    0.4     0.8    1.0
+        mazeRead                        Main                              solve.hs:149:1-73                                  783     122370    0.7    0.7     0.7    0.7
+         marray#                        Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    784     122370    0.0    0.0     0.0    0.0
+       mazeModify                       Main                              solve.hs:155:1-83                                  785     122370    1.4    1.3     1.6    1.4
+        marray#                         Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    786     244740    0.0    0.0     0.0    0.0
+        mazeEquate.\                    Main                              solve.hs:172:36-65                                 797     121608    0.1    0.1     0.1    0.1
+      mazeSolve                         Main                              solve.hs:(166,1)-(167,98)                          763      40783    0.6    0.3     1.8    0.9
+       mazeModify                       Main                              solve.hs:155:1-83                                  766      40783    0.8    0.4     0.9    0.5
+        marray#                         Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    767      81566    0.0    0.0     0.0    0.0
+        mazeSolve.\                     Main                              solve.hs:167:59-90                                 775      40781    0.1    0.0     0.1    0.0
+       mazeRead                         Main                              solve.hs:149:1-73                                  764      40783    0.4    0.2     0.4    0.2
+        marray#                         Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    765      40783    0.0    0.0     0.0    0.0
+      pixDirections                     Main                              solve.hs:(291,1)-(296,3)                           779      40783    1.1    0.5     1.1    0.5
+      solveContinue.continuesNextSorted Main                              solve.hs:(403,5)-(406,44)                          787      40783    6.3    3.3    30.1   25.5
+       ==                               Main                              solve.hs:98:3-87                                   804     887693    1.6    1.4     1.6    1.4
+       <=                               Main                              solve.hs:101:3-75                                  805     881540    0.4    0.0     0.4    0.0
+       solved                           Main                              solve.hs:59:5-10                                   796     162011    0.2    0.0     0.2    0.0
+       cursorToContinue                 Main                              solve.hs:(357,1)-(365,51)                          798      81197    0.8    0.7    15.1   14.7
+        cursorToContinue.score          Main                              solve.hs:364:7-67                                  806      81197    0.3    0.1     0.3    0.1
+        pieceRotationCount              Main                              solve.hs:(352,1)-(354,95)                          799      81197    7.4    8.5    14.0   13.8
+         mazeRead                       Main                              solve.hs:149:1-73                                  800     404633    1.6    2.2     1.6    2.2
+          marray#                       Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    801     404633    0.0    0.0     0.0    0.0
+         cursorDelta                    Main                              solve.hs:(308,1)-(312,60)                          809     324693    0.8    0.5     0.8    0.5
+         mazeBounded                    Main                              solve.hs:134:1-70                                  808     324693    2.2    1.9     2.3    1.9
+          width                         Main                              solve.hs:68:5-9                                    811     324020    0.0    0.0     0.0    0.0
+          height                        Main                              solve.hs:69:5-10                                   812     323862    0.1    0.0     0.1    0.0
+         pixRotations                   Main                              solve.hs:(285,1)-(288,26)                          807      81197    1.0    0.3     1.0    0.3
+         rotate                         Main                              solve.hs:305:1-25                                  810          0    0.9    0.3     0.9    0.3
+        cursorToContinue.created'       Main                              solve.hs:361:7-28                                  813      80965    0.1    0.0     0.1    0.0
+        cursorToContinue.direct         Main                              solve.hs:359:7-43                                  829      65198    0.0    0.0     0.0    0.0
+        cursorToContinue.origin'        Main                              solve.hs:360:7-44                                  828      65198    0.0    0.0     0.0    0.0
+       mazeDeltas                       Main                              solve.hs:(315,1)-(318,66)                          788      40783    3.7    3.9     6.5    6.1
+        mazeBounded                     Main                              solve.hs:134:1-70                                  789     163132    1.4    1.0     1.4    1.0
+         width                          Main                              solve.hs:68:5-9                                    792     162514    0.1    0.0     0.1    0.0
+         height                         Main                              solve.hs:69:5-10                                   793     162378    0.0    0.0     0.0    0.0
+        mazeDeltas.\                    Main                              solve.hs:318:12-48                                 790     163132    0.1    0.0     0.5    0.4
+         cursorDelta                    Main                              solve.hs:(308,1)-(312,60)                          791     244329    0.4    0.4     0.4    0.4
+        mazeRead                        Main                              solve.hs:149:1-73                                  794     162011    0.9    0.9     0.9    0.9
+         marray#                        Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    795     162011    0.0    0.0     0.0    0.0
+      traceProgress                     Main                              solve.hs:(244,1)-(249,85)                          802      40783    0.5    0.3     0.7    0.3
+       traceProgress.percentage         Main                              solve.hs:248:5-72                                  846         40    0.0    0.0     0.0    0.0
+        mazeSize                        Main                              solve.hs:137:1-46                                  847         40    0.0    0.0     0.0    0.0
+       traceProgress.solvedStr          Main                              solve.hs:249:5-85                                  845         40    0.1    0.0     0.1    0.0
+    maze                                Main                              solve.hs:91:5-8                                    855          1    0.0    0.0     0.0    0.0
+   verify                               Main                              solve.hs:(445,1)-(458,67)                          850          1    0.0    0.0     0.0    0.0
+    mazeSize                            Main                              solve.hs:137:1-46                                  874          1    0.0    0.0     0.0    0.0
+    verify.partFollow                   Main                              solve.hs:(449,5)-(458,67)                          852          1    0.0    0.0     0.0    0.0
+     mazeRead                           Main                              solve.hs:149:1-73                                  854          1    0.0    0.0     0.0    0.0
+      marray#                           Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    856          1    0.0    0.0     0.0    0.0
+   whenM                                Control.Monad.Extra               src/Control/Monad/Extra.hs:187:1-29                848          1    0.0    0.0     6.2    5.8
+    ifM                                 Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                849          1    0.0    0.0     6.2    5.8
+     verify                             Main                              solve.hs:(445,1)-(458,67)                          851          0    0.0    0.0     6.2    5.8
+      verify.partFollow                 Main                              solve.hs:(449,5)-(458,67)                          853      20000    3.4    2.6     6.2    5.8
+       mazeRead                         Main                              solve.hs:149:1-73                                  857      99399    0.5    0.5     0.5    0.5
+        marray#                         Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    864      99399    0.0    0.0     0.0    0.0
+       cursorDelta                      Main                              solve.hs:(308,1)-(312,60)                          859      80000    0.2    0.1     0.2    0.1
+       mazeBounded                      Main                              solve.hs:134:1-70                                  858      80000    0.4    0.5     0.4    0.5
+        width                           Main                              solve.hs:68:5-9                                    862      79700    0.0    0.0     0.0    0.0
+        height                          Main                              solve.hs:69:5-10                                   863      79600    0.0    0.0     0.0    0.0
+       mazeDeltas                       Main                              solve.hs:(315,1)-(318,66)                          865      20000    0.8    1.1     1.3    1.7
+        mazeBounded                     Main                              solve.hs:134:1-70                                  867      39998    0.2    0.2     0.2    0.2
+         height                         Main                              solve.hs:69:5-10                                   871      39998    0.0    0.0     0.0    0.0
+         width                          Main                              solve.hs:68:5-9                                    870      39998    0.0    0.0     0.0    0.0
+        mazeDeltas.\                    Main                              solve.hs:318:12-48                                 868      39998    0.0    0.0     0.2    0.1
+         cursorDelta                    Main                              solve.hs:(308,1)-(312,60)                          869      79996    0.2    0.1     0.2    0.1
+        mazeRead                        Main                              solve.hs:149:1-73                                  872      39998    0.2    0.2     0.2    0.2
+         marray#                        Data.Primitive.Array              Data/Primitive/Array.hs:92:5-11                    873      39998    0.0    0.0     0.0    0.0
+       pipe                             Main                              solve.hs:58:5-8                                    861      20000    0.0    0.0     0.0    0.0
+       pixDirections                    Main                              solve.hs:(291,1)-(296,3)                           866      20000    0.4    0.3     0.4    0.3
+       rotate                           Main                              solve.hs:305:1-25                                  860          0    0.1    0.0     0.1    0.0
+  main.\                                Main                              solve.hs:517:41-82                                 682          1    0.0    0.0     0.0    0.0
+  whenM                                 Control.Monad.Extra               src/Control/Monad/Extra.hs:187:1-29                680          0    0.0    0.0     0.0    0.0
+   ifM                                  Control.Monad.Extra               src/Control/Monad/Extra.hs:195:1-41                681          0    0.0    0.0     0.0    0.0
