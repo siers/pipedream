@@ -192,13 +192,19 @@ renderWithPositions current Progress{depth, maze=maze@MMaze{board, width, height
   unlines . map concat . vectorLists width height . V.imap fmt . V.convert <$> V.freeze board
   where
     colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
-    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash
+
+    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash :: Cursor -> String
     colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partEquateUnsafe maze partId) else Nothing
+
+    -- color256 = (printf "\x1b[38;5;%im" . (\c -> if c == 15 then 8 :: Int else 9)) . colorHash :: Cursor -> String
+    -- colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partId) else Nothing
 
     colorHead cur = printf "\x1b[31m" <$ ((cur ==) `mfilter` (cursor <$> current))
     colorContinues cur = printf "\x1b[32m" <$ find ((cur ==) . cursor) continues
+    -- colorContinues cur = color256 . origin <$> find ((cur ==) . cursor) continues
 
     color :: Cursor -> Piece -> Maybe String
+    -- color cur piece = colorHead cur `mplus` colorContinues cur
     color cur piece = colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
 
     fmt idx piece@Piece{pipe} =
