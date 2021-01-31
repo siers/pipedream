@@ -24,7 +24,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as S
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
-import System.Environment (getEnv, lookupEnv, setEnv)
+import System.Environment (getEnv, lookupEnv, setEnv, getArgs)
 import System.IO.Unsafe
 import Text.Printf (printf)
 
@@ -126,6 +126,9 @@ parse input = do
   maze <- pure (MMaze board (length (head rect)) (length rect))
   maze <$ mazeMap maze (\c p -> p { partId = c })
   where rect = filter (not . null) . map (map toPix) . lines $ input
+
+mazeStore :: MMaze -> String -> IO ()
+mazeStore m label = writeFile label =<< renderStr m
 
 mazeBounded :: MMaze -> Cursor -> Bool
 mazeBounded m (x, y) = x >= 0 && y >= 0 && width m > x && height m > y
@@ -382,7 +385,6 @@ solveContinue
   where
     solvedM = mazeCursorSolved maze . cursor
     continuesNextSorted origin = do
-      -- next <- traverse (cursorToContinue maze continue { origin }) . filter (not . solved . view _1) =<< mazeDeltas maze cur directions
       deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
       next <- traverse (cursorToContinue maze continue { origin }) deltas
       pure $ foldr (S.insert) continues next
@@ -441,9 +443,9 @@ verify maze = do
 
 storeBad :: Int -> MMaze -> MMaze -> IO MMaze
 storeBad level original solved = do
-  whenM (fmap not . verify =<< mazeClone solved) $ do
-    putStrLn ("storing bad level " ++ show level ++ " solve")
-    (writeFile ("samples/bad-" ++ show level) =<< renderStr original)
+  whenM (fmap not . verify $ solved) $ do
+    putStrLn (printf "storing bad level %i solve" level)
+    mazeStore original ("samples/bad-" ++ show level)
   pure solved
 
 {--- Main ---}
@@ -482,6 +484,11 @@ pļāpātArWebsocketu conn = traverse_ solveLevel [3,3..]
       send (T.pack "verify")
       putStrLn =<< recv
 
+solveFiles :: String -> IO ()
+solveFiles file = do
+  solve <- solve =<< parse =<< readFile file
+  whenM (not <$> verify solve) (putStrLn "solution invalid")
+
 main :: IO ()
 main = do
   whenM (isNothing <$> lookupEnv "trace") $ setEnv "trace" "-"
@@ -491,7 +498,4 @@ main = do
 
   if websocket
   then withSocketsDo $ WS.runClient "maze.server.host" 80 "/game-pipes/" pļāpātArWebsocketu
-  else do
-    solve <- solve =<< parse =<< getContents
-    render solve
-    whenM (not <$> verify solve) (putStrLn "solution invalid")
+  else traverse_ solveFiles . (\args -> if null args then ["/dev/stdin"] else args) =<< getArgs
