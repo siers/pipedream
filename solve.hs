@@ -371,7 +371,7 @@ solveContinue
     unwindThis <- mazeSolve maze continue
 
     neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (pixDirections this))
-    (origin':neighbours') <- pure . sort $ origin : neighbours
+    origin' <- pure . minimum $ origin : neighbours
     unwindEquate <- mazeEquate maze origin' neighbours
 
     continuesNext <- continuesNextSorted origin'
