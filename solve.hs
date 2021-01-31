@@ -312,14 +312,14 @@ mazeDeltas m c directions =
   . filter (mazeBounded m . (view _1))
   $ (\d -> (cursorDelta c d, cursorDelta c d, d)) `map` directions
 
-mazeDeltasWalls :: MMaze -> Cursor -> IO [PieceDelta]
+mazeDeltasWalls :: MMaze -> Cursor -> [(Piece, Direction)]
 mazeDeltasWalls m c =
-  traverse fetch . map (\d -> (cursorDelta c d, d)) $ directions
+  map (\d -> fetch (cursorDelta c d, d)) $ directions
   where
     fetch (c, d) =
       if mazeBounded m c
-      then (, c, d) <$> mazeRead m c
-      else pure (Piece 0 True (0, 0) True, c, d)
+      then (, d) $ unsafePerformIO (mazeRead m c)
+      else (Piece 0 True (0, 0) True, d)
 
 {--- Solver bits ---}
 
@@ -328,18 +328,22 @@ pixValid :: (Pix, Pix, Rotation, Direction) -> Bool
 pixValid (this, that, rotation, direction) =
   not $ (rotate rotation this `Bit.xor` rotate 2 that) `Bit.testBit` direction
 
-validateRotation :: Pix -> [PieceDelta] -> Rotation -> Bool
+validateRotation :: Pix -> [(Piece, Direction)] -> Rotation -> Bool
 validateRotation this deltas rotation = all (validateDirection this rotation) deltas
   where
-    validateDirection this rotation (Piece{pipe=that, solved}, _, direction) = do
+    validateDirection this rotation (Piece{pipe=that, solved}, direction) = do
       not solved || pixValid (this, that, rotation, direction)
 
 pieceRotations :: MMaze -> Cursor -> IO [Pix]
 pieceRotations maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
-  deltas <- mazeDeltasWalls maze cur
-  rotations <- pure . filter (validateRotation this deltas) $ pixRotations this
+  rotations <- pure . filter (validateRotation this (mazeDeltasWalls maze cur)) $ pixRotations this
   pure . map (flip rotate this) $ rotations
+
+pieceRotationCount :: MMaze -> Cursor -> IO Int
+pieceRotationCount maze@MMaze{board} cur = do
+  Piece{pipe=this} <- mazeRead maze cur
+  pure . length . filter (validateRotation this (mazeDeltasWalls maze cur)) $ pixRotations this
 
 cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO Continue
 cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) = do
@@ -363,9 +367,9 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
   andM $ stuck : map (discontinued thisPart) (S.toList continues)
   where
     stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (pixDirections this)
-    discontinued thisPart Continue{cursor=c} =
+    discontinued thisPart Continue{cursor=c, origin} =
       if cur == c then pure True else
-        ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze c)
+        ifM (mazeCursorSolved maze c) (pure True) ((thisPart /=) <$> partEquate maze origin)
 
 {--- Solver ---}
 
@@ -438,7 +442,7 @@ verify maze = do
     partFollow maze visited [] = pure (S.size visited)
     partFollow maze visited (cursor:next) = do
       this <- pipe <$> mazeRead maze cursor
-      valid <- validateRotation this <$> mazeDeltasWalls maze cursor <*> pure 0
+      valid <- validateRotation this <$> (pure $ mazeDeltasWalls maze cursor) <*> pure 0
       if not valid
       then pure (S.size visited)
       else do
