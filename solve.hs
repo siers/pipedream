@@ -6,7 +6,7 @@ module Main where
 
 import Control.Lens ((&), (%~), (.~), set, view, _1, _2)
 import Control.Lens.TH
-import Control.Monad.Extra (allM, ifM, whenM)
+import Control.Monad.Extra (allM, andM, ifM, whenM)
 import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
@@ -27,9 +27,6 @@ import qualified Data.Vector.Mutable as MV
 import System.Environment (getEnv, lookupEnv, setEnv, getArgs)
 import System.IO.Unsafe
 import Text.Printf (printf)
-
-import Numeric (showIntAtBase)
-import Data.Char (intToDigit)
 
 -- IO
 
@@ -282,6 +279,7 @@ charMap = Map.fromList charMapEntries
 pixMap :: Map Pix Char
 pixMap = Map.fromList $ map swap charMapEntries
 
+pixRotations :: Pix -> [Rotation]
 pixRotations 0b11111111 = [0]
 pixRotations 0b10101010 = [0,1]
 pixRotations 0b01010101 = [0,1]
@@ -297,9 +295,6 @@ pixDirections n = fold
 
 toPix = (charMap !) :: Char -> Pix
 toChar = (pixMap !) :: Pix -> Char
-
-showBin :: Integral a => a -> String
-showBin = flip (showIntAtBase 2 intToDigit) "" . fromIntegral
 
 rotate :: Rotation -> Pix -> Pix
 rotate = flip Bit.rotateL
@@ -349,12 +344,13 @@ pieceRotations maze@MMaze{board} cur = do
 cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO Continue
 cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) = do
   choices <- length <$> pieceRotations maze c
-  let direct = char `Bit.testBit` direction -- possible bug
-  let origin' = if direct then origin else c
-  let created' = created + 1
-  -- surprisingly, this if is equivalent to just the else part
-  -- let score = (created' + choices * 10)
-  let score = if choices == 0 then 0 else (created' + choices * 10)
+  let
+    direct = char `Bit.testBit` direction -- possible bug
+    origin' = if direct then origin else c
+    created' = created + 1
+    -- surprisingly, this if is equivalent to just the else part
+    -- score = (created' + choices * 10)
+    score = if choices == 0 then 0 else (created' + choices * 10)
   pure $ Continue c pixUnset origin' created' score
 
 progressPop :: Progress -> IO Progress
@@ -364,7 +360,7 @@ progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
 pieceDead :: MMaze -> (Continue, Set Continue) -> IO Bool
 pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues) = do
   thisPart <- partEquate maze . partId =<< mazeRead maze cur
-  allM id $ stuck : map (discontinued thisPart) (S.toList continues)
+  andM $ stuck : map (discontinued thisPart) (S.toList continues)
   where
     stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (pixDirections this)
     discontinued thisPart Continue{cursor=c} =
@@ -373,7 +369,7 @@ pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, continues
 
 {--- Solver ---}
 
--- Solves a piece; if valid, (mutates the maze; sets unwind) else (return progress without mutations)
+-- Solves a valid piece, mutates the maze and sets unwind
 solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
   progress@Progress{iter, depth, maze=maze@MMaze{board}, continues}
