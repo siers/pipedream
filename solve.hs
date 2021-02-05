@@ -1,4 +1,4 @@
-{-# LANGUAGE TupleSections, NamedFieldPuns, TemplateHaskell, BinaryLiterals #-}
+{-# LANGUAGE TupleSections, NamedFieldPuns, TemplateHaskell, BinaryLiterals, StrictData, BangPatterns #-}
 
 module Main where
 
@@ -11,7 +11,7 @@ import Control.Monad (join, mplus, mfilter, filterM, void)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
 import Data.Function (on)
-import Data.List (find, elemIndex)
+import Data.List (find, elemIndex, foldl')
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isNothing)
 import Data.Set (Set)
@@ -128,8 +128,9 @@ mazeStore :: MMaze -> String -> IO ()
 mazeStore m label = writeFile label =<< renderStr m
 
 mazeBounded :: MMaze -> Cursor -> Bool
-mazeBounded m (x, y) = x >= 0 && y >= 0 && width m > x && height m > y
+mazeBounded MMaze{width, height} (!x, !y) = x >= 0 && y >= 0 && width > x && height > y
 
+{-# INLINE mazeSize #-}
 mazeSize :: MMaze -> Int
 mazeSize MMaze{width, height} = width * height
 
@@ -142,9 +143,11 @@ mazeLists MMaze{board, width, height} = vectorLists width height . V.convert <$>
 mazeCursor :: MMaze -> Int -> Cursor
 mazeCursor MMaze{width} = swap . flip quotRem width
 
+{-# INLINE mazeRead #-}
 mazeRead :: MMaze -> Cursor -> IO Piece
 mazeRead MMaze{board, width} (x, y) = MV.unsafeRead board (x + y * width)
 
+{-# INLINE mazeCursorSolved #-}
 mazeCursorSolved :: MMaze -> Cursor -> IO Bool
 mazeCursorSolved MMaze{board, width} (x, y) = solved <$> MV.unsafeRead board (x + y * width)
 
@@ -313,50 +316,59 @@ mazeDeltas m c directions =
   $ (\d -> (cursorDelta c d, cursorDelta c d, d)) `map` directions
 
 mazeDeltasWalls :: MMaze -> Cursor -> IO [(Piece, Direction)]
-mazeDeltasWalls m c =
-  traverse fetch . map (\d -> (cursorDelta c d, d)) $ directions
+mazeDeltasWalls m c = traverse (mazeDeltaWall m c) directions
+
+{-# INLINE mazeDeltaWall #-}
+mazeDeltaWall :: MMaze -> Cursor -> Direction -> IO (Piece, Direction)
+mazeDeltaWall m !c !dir =
+  if mazeBounded m delta
+  then (, dir) <$> mazeRead m delta
+  else pure (Piece 0 True (0, 0) True, dir)
   where
-    fetch (c, d) =
-      if mazeBounded m c
-      then (, d) <$> mazeRead m c
-      else pure (Piece 0 True (0, 0) True, d)
+    delta = cursorDelta c dir
 
 {--- Solver bits ---}
 
 -- given current pixel at rotation, does it match the pixel at direction from it?
 pixValid :: (Pix, Pix, Rotation, Direction) -> Bool
-pixValid (this, that, rotation, direction) =
+pixValid (!this, !that, !rotation, !direction) =
   not $ (rotate rotation this `Bit.xor` rotate 2 that) `Bit.testBit` direction
+
+{-# INLINE validateDirection #-}
+validateDirection :: Pix -> Rotation -> (Piece, Direction) -> Bool
+validateDirection this rotation (Piece{pipe=that, solved}, direction) = do
+  not solved || pixValid (this, that, rotation, direction)
 
 validateRotation :: Pix -> [(Piece, Direction)] -> Rotation -> Bool
 validateRotation this deltas rotation = all (validateDirection this rotation) deltas
-  where
-    validateDirection this rotation (Piece{pipe=that, solved}, direction) = do
-      not solved || pixValid (this, that, rotation, direction)
+
+{-# INLINE validateRotationM #-}
+validateRotationM :: MMaze -> Cursor -> Pix -> Rotation -> IO Bool
+validateRotationM maze cursor this rotation =
+  (fmap (validateDirection this rotation) . mazeDeltaWall maze cursor) `allM` directions
 
 pieceRotations :: MMaze -> Cursor -> IO [Pix]
 pieceRotations maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
-  deltas <- mazeDeltasWalls maze cur
-  rotations <- pure . filter (validateRotation this deltas) $ pixRotations this
-  pure . map (flip rotate this) $ rotations
+  fmap (map (flip rotate this)) . filterM (validateRotationM maze cur this) $ pixRotations this
 
 pieceRotationCount :: MMaze -> Cursor -> IO Int
 pieceRotationCount maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
-  deltas <- mazeDeltasWalls maze cur
-  pure . length . filter (validateRotation this deltas) $ pixRotations this
+  fmap length . filterM (validateRotationM maze cur this) $ pixRotations this
+
+choiceScoreCoefficient = 10
 
 cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO Continue
-cursorToContinue maze Continue{char, origin, created} (_, c@(x, y), direction) = do
-  choices <- length <$> pieceRotations maze c
+cursorToContinue maze Continue{char, origin, created} (_, !c@(x, y), !direction) = do
+  choices <- pieceRotationCount maze c
   let
-    direct = char `Bit.testBit` direction -- possible bug
+    direct = char `Bit.testBit` direction
     origin' = if direct then origin else c
     created' = created + 1
     -- surprisingly, this if is equivalent to just the else part
     -- score = (created' + choices * 10)
-    score = if choices == 0 then 0 else (created' + choices * 10)
+    score = if choices == 0 then 0 else (created' + choices * choiceScoreCoefficient)
   pure $ Continue c pixUnset origin' created' score
 
 progressPop :: Progress -> IO Progress
@@ -398,7 +410,7 @@ solveContinue
     continuesNextSorted origin = do
       deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
       next <- traverse (cursorToContinue maze continue { origin }) deltas
-      pure $ foldr (S.insert) continues next
+      pure $ foldl' (flip S.insert) continues next
 
 findContinue :: Progress -> IO (Progress, Continue)
 findContinue p@Progress{maze, continues} =
@@ -433,7 +445,7 @@ solve :: MMaze -> IO MMaze
 solve m = do
   solved@Progress{iter, depth} <- solve' $
     Progress 0 0 (S.singleton (Continue (0, 0) pixUnset (0, 0) 0 0)) [] [] m
-  putStrLn (printf "%i/%i, ratio: %f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
+  putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
 verify :: MMaze -> IO Bool

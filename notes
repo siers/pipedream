@@ -265,10 +265,25 @@ grep --colour total  0.00s user 0.00s system 0% cpu 4.890 total
 
 on fa170bd at 2021-01-31-21:00:28
 % time ./solve samples/4-*
-22060/20000, ratio: 1.103
-24641/20000, ratio: 1.23205
-31466/20000, ratio: 1.5733
-21563/20000, ratio: 1.07815
-22755/20000, ratio: 1.13775
-21087/20000, ratio: 1.05435
-./solve samples/4-*  6.42s user 0.06s system 99% cpu 6.482 total
+  22060/20000, ratio: 1.103
+  24641/20000, ratio: 1.23205
+  31466/20000, ratio: 1.5733
+  21563/20000, ratio: 1.07815
+  22755/20000, ratio: 1.13775
+  21087/20000, ratio: 1.05435
+  ./solve samples/4-*  6.42s user 0.06s system 99% cpu 6.482 total
+
+on e2b3057 at 2021-02-04-20:27:22
+% ghc solve -O && time ./solve samples/4-*
+  22060/20000, ratio: 1.103
+  24641/20000, ratio: 1.23205
+  31466/20000, ratio: 1.5733
+  21563/20000, ratio: 1.07815
+  22755/20000, ratio: 1.13775
+  21087/20000, ratio: 1.05435
+  ./solve samples/4-*  1.27s user 0.04s system 99% cpu 1.310 total
+% ghc solve -O && time ./solve samples/5-2
+  [1 of 1] Compiling Main             ( solve.hs, solve.o )
+  Linking solve ...
+  7223527/120000, ratio: 60.19606
+  ./solve samples/5-2  107.86s user 0.39s system 99% cpu 1:48.26 total
