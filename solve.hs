@@ -74,7 +74,7 @@ data Continue = Continue
   , origin :: PartId
   , choices :: Int --- number of possible rotations without clashes the surrounding solved pieces
   , score :: Int
-  }
+  } deriving Show
 
 type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
@@ -95,11 +95,7 @@ instance Eq Continue where
   Continue{cursor=ca, score=sa} == Continue{cursor=cb, score=sb} = ca == cb && sa == sb
 
 instance Ord Continue where
-  Continue{cursor=ca, score=sa} <= Continue{cursor=cb, score=sb} = sa <= sb --  || ca == cb
-
-instance Show Continue where
-  show Continue{cursor, char, origin} =
-    fold ["Continue ", filter (/= ' ') [toChar char], show cursor, " of ", show origin]
+  Continue{cursor=ca, score=sa} <= Continue{cursor=cb, score=sb} = if sa == sb then ca == cb else sa <= sb
 
 instance Show Progress where
   show ps@Progress{iter, continues} =
@@ -357,22 +353,23 @@ pieceRotationCount maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
   fmap length . filterM (validateRotationM maze cur this) $ pixRotations this
 
-choiceScoreCoefficient = 10
-
-cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO Continue
+cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO (Continue, [Continue])
 cursorToContinue maze Continue{char, origin} (_, !c@(x, y), !direction) = do
   choices <- pieceRotationCount maze c
   let
     direct = char `Bit.testBit` direction
     origin' = if direct then origin else c
-    score = (x - y + choices * choiceScoreCoefficient)
-  pure $ Continue c pixUnset origin' choices score
+    scoreCoeff = 10
+    score = (x - y + choices * scoreCoeff)
+    remove choices' = Continue c pixUnset (0, 0) 0 (x - y + (choices' * scoreCoeff))
+  pure $ (Continue c pixUnset origin' choices score, remove <$> [0..3] )
 
 addNextContinues :: MMaze -> Continue -> PartId -> Set Continue -> IO (Set Continue)
 addNextContinues maze continue@Continue{cursor=cur} origin continues = do
   deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
-  next <- traverse (cursorToContinue maze continue { origin }) deltas
-  pure $ foldl' (flip S.insert) continues next
+  (next, removes) <- fmap unzip $ traverse (cursorToContinue maze continue { origin }) deltas
+  continues' <- pure $ foldl' (flip S.delete) continues . join $ removes
+  pure $ foldl' (flip S.insert) continues' next
 
 progressPop :: Progress -> IO Progress
 progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
