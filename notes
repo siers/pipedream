@@ -287,3 +287,13 @@ on e2b3057 at 2021-02-04-20:27:22
   Linking solve ...
   7223527/120000, ratio: 60.19606
   ./solve samples/5-2  107.86s user 0.39s system 99% cpu 1:48.26 total
+
+on 3f2f712 at 2021-02-07-23:22:30
+% ghc solve -O && time ./solve samples/5-*
+  443251/120000, ratio: 3.69376
+  185532/120000, ratio: 1.54610
+  370056/120000, ratio: 3.08380
+  1458363/120000, ratio: 12.15302
+  195839/120000, ratio: 1.63199
+  654929/120000, ratio: 5.45774
+  ./solve samples/5-*  66.74s user 0.60s system 99% cpu 1:07.34 total
