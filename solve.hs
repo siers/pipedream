@@ -238,11 +238,11 @@ traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
 -- faster, because no env lookups, but just by a little
 traceProgress :: Progress -> IO Progress
 traceProgress p@Progress{iter, depth, maze} = do
-  if iter `mod` 1000 == 0 then putStrLn solvedStr else pure ()
-  pure p
+  if iter `mod` 1000 == 0 then p <$ putStrLn solvedStr else pure p
   where
     percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
-    solvedStr = (printf "\x1b[2Ksolved: %0.2f%%\x1b[1A" (percentage * 100 :: Double))
+    ratio = (fromIntegral iter / fromIntegral depth :: Double)
+    solvedStr = printf "\x1b[2Ksolved: %02.2f%%, ratio: %0.2f\x1b[1A" (percentage * 100 :: Double) ratio
 
 {--- Model ---}
 

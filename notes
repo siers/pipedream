@@ -164,6 +164,14 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
   25006 1
     508 2
 
+2021-02-08-11:26:40
+• cache delta (add wall :: Boolean) computation(thus avoid mazeBounded)
+• priority: Set Continue ordered by score
+• continues: Set Continue ordred by cursor
+• components: Map PartId Int -- with unique priority by cursor this is possible
+• update with better scores through continues, join origins
+• bring back Continue{created}, because we don't need guessable scores if we have `continues'
+
 --
 
 9f9a4fe
