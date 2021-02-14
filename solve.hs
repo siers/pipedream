@@ -1,4 +1,15 @@
-{-# LANGUAGE TupleSections, NamedFieldPuns, TemplateHaskell, BinaryLiterals, StrictData, BangPatterns #-}
+{-# LANGUAGE TupleSections, NamedFieldPuns, BinaryLiterals, TemplateHaskell, CPP #-}
+
+{-# LANGUAGE StrictData, BangPatterns #-}
+{-# OPTIONS_GHC -O #-}
+
+#ifndef TRACE
+#define TRACE 0
+#endif
+
+#ifndef FREQ
+#define FREQ 3000
+#endif
 
 module Main where
 
@@ -13,7 +24,7 @@ import Data.Foldable (fold)
 import Data.Function (on)
 import Data.List (find, elemIndex, foldl')
 import Data.Map (Map, (!))
-import Data.Maybe (fromMaybe, fromJust, isNothing)
+import Data.Maybe (fromMaybe, fromJust)
 import Data.Set (Set)
 import Data.Tuple (swap)
 import Data.Vector.Mutable (MVector)
@@ -24,7 +35,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as S
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
-import System.Environment (getEnv, lookupEnv, setEnv, getArgs)
+import System.Environment (lookupEnv, getArgs)
 import System.IO.Unsafe
 import Text.Printf (printf)
 
@@ -217,33 +228,23 @@ renderStr MMaze{board, width, height} = do
 
 traceBoard :: Continue -> Progress -> IO Progress
 traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
-  mode <- getEnv "trace"
-  freq <- (read :: String -> Int) <$> getEnv "freq"
+  let mode = TRACE
+  let freq = FREQ
   tracer mode freq *> pure progress
   where
     tracer mode freq -- reorder/comment out clauses to disable tracing
-      | iter `mod` freq == 0 && mode == "board" = traceStr >>= putStrLn
-      | iter `mod` freq == 0 && mode == "perc" = solvedStr >>= putStrLn
+      | iter `mod` freq == 0 && mode == 1 = pure solvedStr >>= putStrLn
+      | iter `mod` freq == 0 && mode == 2 = ((clear ++) <$> traceStr) >>= putStrLn
+      | iter `mod` freq == 0 && mode == 3 = traceStr >>= putStrLn
       | True = pure ()
 
     percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
-    solvedStr = pure $ ("\x1b[2Ksolved: " ++ show (percentage * 100) ++ "%" ++ "\x1b[1A")
+    ratio = (fromIntegral iter / fromIntegral depth :: Double)
+    solvedStr = printf "\x1b[2Ksolved: %02.2f%%, ratio: %0.2f\x1b[1A" (percentage * 100 :: Double) ratio :: String
 
     stats = (show iter ++ "/" ++ show depth ++ " at " ++ show (cursor current) ++ "\n")
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    traceStr = (clear ++) <$> renderWithPositions (Just current) progress
-    -- traceStr = (stats ++) <$> renderWithPositions (Just current) progress
-    -- traceStr = renderWithPositions (Just current) progress
-    -- traceStr = renderWithPositions progress
-
--- faster, because no env lookups, but just by a little
-traceProgress :: Progress -> IO Progress
-traceProgress p@Progress{iter, depth, maze} = do
-  if iter `mod` 1000 == 0 then p <$ putStrLn solvedStr else pure p
-  where
-    percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
-    ratio = (fromIntegral iter / fromIntegral depth :: Double)
-    solvedStr = printf "\x1b[2Ksolved: %02.2f%%, ratio: %0.2f\x1b[1A" (percentage * 100 :: Double) ratio
+    traceStr = renderWithPositions (Just current) progress
 
 {--- Model ---}
 
@@ -397,8 +398,8 @@ solveContinue
     unwindEquate <- mazeEquate maze origin' neighbours
     continuesNext <- addNextContinues maze iter continue origin' continues
 
-    traceProgress $ progress
-    -- traceBoard continue $ progress
+    -- traceProgress $ progress
+    traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
       & continuesL .~ continuesNext
@@ -506,9 +507,6 @@ solveFiles file = do
 
 main :: IO ()
 main = do
-  whenM (isNothing <$> lookupEnv "trace") $ setEnv "trace" "-"
-  whenM (isNothing <$> lookupEnv "freq") $ setEnv "freq" "1"
-
   websocket <- (== "1") . fromMaybe "0" <$> lookupEnv "websocket"
 
   if websocket
