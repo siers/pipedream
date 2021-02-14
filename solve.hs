@@ -88,26 +88,26 @@ data Continue = Continue
   , created :: Int -- unique ID for Ord, particularly: created = Progress.iter
   } deriving Show
 
+type Score = (Int, Int) -- score, created
+
+type Priority = Map Score Continue
+type Continues = Map Cursor Continue
+
 type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
 
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
   , depth :: Int -- number of solves, so also the length of unwinds/space
-  , priority :: Set Continue -- priority queue for next guesses
-  , space :: [[(Continue, Set Continue)]] -- unexplored solution space. enables parallelization. item per choice, per cursor.
+  , priority :: Priority -- priority queue for next guesses (not a heap, because of reprioritizing)
+  , continues :: Continues -- for finding if continue exists already in Priority
+  , space :: [[(Continue, (Priority, Continues))]] -- unexplored solution space. enables parallelization. item per choice, per cursor.
   , unwinds :: [Unwind] -- history, essentially. an item per a solve. pop when (last space == [])
   , maze :: MMaze
   }
 
 makeLensesFor ((\n -> (n, n ++ "L")) <$> ["cursor", "char", "choices", "origin", "score"]) ''Continue
 makeLensesFor ((\n -> (n, n ++ "L")) <$> ["iter", "depth", "priority", "continues", "space", "unwinds", "maze"]) ''Progress
-
-instance Eq Continue where
-  (==) = (==) `on` (\Continue{score, created} -> (score, created))
-
-instance Ord Continue where
-  (<=) = (<=) `on` (\Continue{score, created} -> (score, created))
 
 instance Show Progress where
   show ps@Progress{iter, priority} =
@@ -219,7 +219,7 @@ renderWithPositions current Progress{depth, maze=maze@MMaze{board, width, height
       printf $ fromMaybe (toChar pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c (toChar pipe)) $ color (mazeCursor maze idx) piece
 
 render :: MMaze -> IO ()
-render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 S.empty [] []
+render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 Map.empty Map.empty [] []
 
 renderStr :: MMaze -> IO String
 renderStr MMaze{board, width, height} = do
@@ -355,6 +355,9 @@ pieceRotationCount maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
   fmap length . filterM (validateRotationM maze cur this) $ pixRotations this
 
+continueScore :: Continue -> Score
+continueScore Continue{score, created} = (score, created)
+
 cursorToContinue :: MMaze -> Int -> Continue -> (PieceDelta, Int) -> IO Continue
 cursorToContinue maze iter Continue{char, origin} ((_, !c@(x, y), !direction), index) = do
   choices <- pieceRotationCount maze c
@@ -365,11 +368,27 @@ cursorToContinue maze iter Continue{char, origin} ((_, !c@(x, y), !direction), i
     score = (x + y + choices * scoreCoeff)
   pure $ Continue c pixUnset origin' choices score (iter * 4 + index)
 
-addNextPriority :: MMaze -> Int -> Continue -> PartId -> Set Continue -> IO (Set Continue)
-addNextPriority maze iter continue@Continue{cursor=cur} origin priority = do
-  deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
-  next <- traverse (cursorToContinue maze iter continue { origin }) (zip deltas [0..])
-  pure $ foldl' (flip S.insert) priority next
+updatePriority :: Progress -> Continue -> PartId -> IO (Priority, Continues)
+updatePriority
+  progress@Progress{iter, depth, maze=maze@MMaze{board}, priority, continues}
+  continue@Continue{cursor=cur} origin = do
+    deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
+    next <- traverse (cursorToContinue maze iter continue { origin }) (zip deltas [0..])
+    pure $
+      (foldl'
+        (\(priority, continues) c@Continue{cursor, score, origin} ->
+          let
+            ((oldC, newC), continues') = Map.alterF insertContinue cursor continues
+            insertContinue :: Maybe Continue -> ((Maybe Score, Maybe Continue), Maybe Continue)
+            insertContinue = maybe ((Nothing, Just c), Just c) $ \exists ->
+              let putback = Just exists { score } in -- (originL %~ (min origin))
+              if continueScore c < continueScore exists
+              then ((Just (continueScore exists), putback), putback)
+              else ((Nothing, Nothing), Just exists)
+            priority' = maybe priority (flip Map.delete priority) oldC
+            priority'' = maybe priority' (\c -> Map.insert (continueScore c) c priority') newC
+          in (priority'', continues'))
+        (priority, continues) next)
 
 progressPop :: Progress -> IO Progress
 progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
@@ -390,37 +409,37 @@ progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
 -- Solves a valid piece, mutates the maze and sets unwind
 solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
-  progress@Progress{iter, depth, maze=maze@MMaze{board}, priority}
+  progress@Progress{iter, depth, maze=maze@MMaze{board}, priority, continues}
   continue@Continue{cursor=cur, char=this, origin} = do
     unwindThis <- mazeSolve maze continue
     neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (pixDirections this))
     origin' <- pure . minimum $ origin : neighbours
     unwindEquate <- mazeEquate maze origin' neighbours
-    newPriority <- addNextPriority maze iter continue origin' priority
+    (newPriority, newContinues) <- updatePriority progress continue origin'
 
     -- traceProgress $ progress
     traceBoard continue $ progress
       & iterL %~ (+1)
       & depthL %~ (+1)
       & priorityL .~ newPriority
+      & continuesL .~ newContinues
       & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
 
 findContinue :: Progress -> IO (Progress, Continue)
-findContinue p@Progress{maze, priority} =
-  ifM (mazeCursorSolved maze cursor)
-    (findContinue p { priority = priority' })
-    (pure (p { priority = priority' }, continue))
+findContinue p@Progress{maze, priority, continues} =
+  pure (p { priority = priority', continues = continues' }, continue)
   where
-    (continue@Continue{cursor}, priority') = S.deleteFindMin priority
+    ((_, continue@Continue{cursor}), priority') = Map.deleteFindMin priority
+    continues' = Map.delete cursor continues
 
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Progress -> IO Progress
 -- solve' Progress{priority=[]} = error "unlikely"
 solve' progressInit@Progress{iter, depth, maze} = do
-  (progress@Progress{priority}, continue) <- findContinue progressInit
+  (progress@Progress{priority, continues}, continue) <- findContinue progressInit
 
   rotations <- pieceRotations maze (cursor continue)
-  guesses <- removeDead . map ((, priority) . ($ continue) . set charL) $ rotations
+  guesses <- removeDead . map ((, (priority, continues)) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
   (if last then pure else solve') progress'
@@ -432,13 +451,13 @@ solve' progressInit@Progress{iter, depth, maze} = do
     backtrack :: Progress -> IO (Progress, Continue)
     backtrack Progress{space=[]} = error "unlikely" -- for solvable mazes
     backtrack p@Progress{space=([]:space)} = progressPop p { space } >>= backtrack
-    backtrack p@Progress{space=(((continue, priority):guesses):space)} =
-      pure (p { priority, space = guesses : space }, continue)
+    backtrack p@Progress{space=(((continue, (priority, continues)):guesses):space)} =
+      pure (p { priority, continues, space = guesses : space }, continue)
 
 solve :: MMaze -> IO MMaze
 solve m = do
   solved@Progress{iter, depth} <- solve' $
-    Progress 0 0 (S.singleton (Continue (0, 0) pixUnset (0, 0) 2 0 0)) [] [] m
+    Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) pixUnset (0, 0) 2 0 0)) Map.empty [] [] m
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 

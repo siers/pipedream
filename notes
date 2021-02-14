@@ -313,3 +313,13 @@ on 3f2f712 at 2021-02-07-23:22:30
   195839/120000, ratio: 1.63199
   654929/120000, ratio: 5.45774
   ./solve samples/5-*  66.74s user 0.60s system 99% cpu 1:07.34 total
+
+on 2d74be3 at 2021-02-20-14:32:31
+count of priority queue sizes: (removed solved pieces)
+14 130 => 30 27
+14 131 => 44 25
+14 165 => 44 26
+14 177 => 48 29
+16 179 => 54 28
+20 180 => 55 30
+./solve samples/2  0.00s user 0.00s system 92% cpu 0.007 total
