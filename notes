@@ -165,10 +165,12 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
     508 2
 
 2021-02-08-11:26:40
-• cache delta (add wall :: Boolean) computation(thus avoid mazeBounded)
-• priority: Set Continue ordered by score
+• cache deltas(with wall :: Boolean) in Vectors (thus avoid mazeBounded)
+• priority: Set Continue ordered by score and iter, thus making them a total order (they're not now!)
 • continues: Set Continue ordred by cursor
-• components: Map PartId Int -- with unique priority by cursor this is possible
+• components: Map PartId Int
+-- thus making continues searchable by cursor and partId
+
 • update with better scores through continues, join origins
 • bring back Continue{created}, because we don't need guessable scores if we have `continues'
 
@@ -190,6 +192,12 @@ runhaskell solve.hs 2>&1 < samples/2  74.92s user 3.69s system 84% cpu 1:33.56 t
 % mkdir -p trash; (cat trash/style.html 2>/dev/null; sed 's:\(.\):<span>\1</span>:g; s/$/<br>/' < samples/1) > trash/sample.html
 
 --
+
+# get more samples
+  % (set -x; for i in {1..50}; do suffix=-$i ./samples/get 4 &; done; wait < <(jobs -p))
+
+# get 50 samples per level
+  % (set -x; for level in {1..6}; do for i in {01..50}; do format="trash/samples/%i-$i" ./samples/get $level &; done; done; wait < <(jobs -p))
 
 # profiler
   % ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' -fexternal-interpreter && ./solve < samples/1

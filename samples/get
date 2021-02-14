@@ -1,6 +1,7 @@
 #! /usr/bin/env bash
 
 level=$1
+filename="$(printf "${format-samples/%i}" "$level")"
 
 if [ "$level" == "1" ] || [ "$level" == "2" ]; then
   sleep=3
@@ -8,4 +9,5 @@ else
   sleep=10
 fi
 
-(echo -e "new $level\nmap"; sleep $sleep) | ws ws://maze.server.host/game-pipes/ 2>/dev/null | grep -v '<' > samples/$level$suffix
+
+(echo -e "new $level\nmap"; sleep $sleep) | ws ws://maze.server.host/game-pipes/ 2>/dev/null | grep -v '<' > "$filename"
