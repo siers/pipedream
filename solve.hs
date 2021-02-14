@@ -74,6 +74,7 @@ data Continue = Continue
   , origin :: PartId
   , choices :: Int --- number of possible rotations without clashes the surrounding solved pieces
   , score :: Int
+  , created :: Int -- unique ID for Ord, particularly: created = Progress.iter
   } deriving Show
 
 type Unwind1 = (Cursor, Piece)
@@ -92,10 +93,10 @@ makeLensesFor ((\n -> (n, n ++ "L")) <$> ["cursor", "char", "choices", "origin",
 makeLensesFor ((\n -> (n, n ++ "L")) <$> ["iter", "depth", "continues", "space", "unwinds", "maze"]) ''Progress
 
 instance Eq Continue where
-  Continue{cursor=ca, score=sa} == Continue{cursor=cb, score=sb} = ca == cb && sa == sb
+  (==) = (==) `on` (\Continue{score, created} -> (score, created))
 
 instance Ord Continue where
-  Continue{cursor=ca, score=sa} <= Continue{cursor=cb, score=sb} = if sa == sb then ca == cb else sa <= sb
+  (<=) = (<=) `on` (\Continue{score, created} -> (score, created))
 
 instance Show Progress where
   show ps@Progress{iter, continues} =
@@ -353,23 +354,21 @@ pieceRotationCount maze@MMaze{board} cur = do
   Piece{pipe=this} <- mazeRead maze cur
   fmap length . filterM (validateRotationM maze cur this) $ pixRotations this
 
-cursorToContinue :: MMaze -> Continue -> PieceDelta -> IO (Continue, [Continue])
-cursorToContinue maze Continue{char, origin} (_, !c@(x, y), !direction) = do
+cursorToContinue :: MMaze -> Int -> Continue -> (PieceDelta, Int) -> IO Continue
+cursorToContinue maze iter Continue{char, origin} ((_, !c@(x, y), !direction), index) = do
   choices <- pieceRotationCount maze c
   let
     direct = char `Bit.testBit` direction
     origin' = if direct then origin else c
     scoreCoeff = 10
     score = (x - y + choices * scoreCoeff)
-    remove choices' = Continue c pixUnset (0, 0) 0 (x - y + (choices' * scoreCoeff))
-  pure $ (Continue c pixUnset origin' choices score, remove <$> [0..3] )
+  pure $ Continue c pixUnset origin' choices score (iter * 4 + index)
 
-addNextContinues :: MMaze -> Continue -> PartId -> Set Continue -> IO (Set Continue)
-addNextContinues maze continue@Continue{cursor=cur} origin continues = do
+addNextContinues :: MMaze -> Int -> Continue -> PartId -> Set Continue -> IO (Set Continue)
+addNextContinues maze iter continue@Continue{cursor=cur} origin continues = do
   deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
-  (next, removes) <- fmap unzip $ traverse (cursorToContinue maze continue { origin }) deltas
-  continues' <- pure $ foldl' (flip S.delete) continues . join $ removes
-  pure $ foldl' (flip S.insert) continues' next
+  next <- traverse (cursorToContinue maze iter continue { origin }) (zip deltas [0..])
+  pure $ foldl' (flip S.insert) continues next
 
 progressPop :: Progress -> IO Progress
 progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
@@ -396,7 +395,7 @@ solveContinue
     neighbours <- partEquate maze `traverse` (origin : map (cursorDelta cur) (pixDirections this))
     origin' <- pure . minimum $ origin : neighbours
     unwindEquate <- mazeEquate maze origin' neighbours
-    continuesNext <- addNextContinues maze continue origin' continues
+    continuesNext <- addNextContinues maze iter continue origin' continues
 
     traceProgress $ progress
     -- traceBoard continue $ progress
@@ -437,7 +436,7 @@ solve' progressInit@Progress{iter, depth, maze} = do
 solve :: MMaze -> IO MMaze
 solve m = do
   solved@Progress{iter, depth} <- solve' $
-    Progress 0 0 (S.singleton (Continue (0, 0) pixUnset (0, 0) 2 0)) [] [] m
+    Progress 0 0 (S.singleton (Continue (0, 0) pixUnset (0, 0) 2 0 0)) [] [] m
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
