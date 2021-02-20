@@ -101,7 +101,7 @@ data Progress = Progress
   , depth :: Int -- number of solves, so also the length of unwinds/space
   , priority :: Priority -- priority queue for next guesses (not a heap, because of reprioritizing)
   , continues :: Continues -- for finding if continue exists already in Priority
-  , space :: [[(Continue, (Priority, Continues))]] -- unexplored solution space. enables parallelization. item per choice, per cursor.
+  , space :: [[(Continue, Progress)]] -- unexplored solution space. enables parallelization. item per choice, per cursor.
   , unwinds :: [Unwind] -- history, essentially. an item per a solve. pop when (last space == [])
   , maze :: MMaze
   }
@@ -391,13 +391,13 @@ updatePriority
         (priority, continues) next)
 
 progressPop :: Progress -> IO Progress
-progressPop p@Progress{depth, maze, unwinds=(unwind:unwinds)} = do
-  (depthL %~ (subtract 1) $ p { unwinds }) <$ mazePop maze unwind
+progressPop p@Progress{maze, unwinds=(unwind:unwinds)} = do
+  p { unwinds } <$ mazePop maze unwind
 
--- pieceDead :: MMaze -> (Continue, Set Continue) -> IO Bool
+-- pieceDead :: MMaze -> (Continue, Priority) -> IO Bool
 -- pieceDead maze@MMaze{board} (continue@Continue{cursor=cur, char=this}, priority) = do
 --   thisPart <- partEquate maze . partId =<< mazeRead maze cur
---   (&&) <$> stuck <*> allM (discontinued thisPart) (S.toList priority)
+--   (&&) <$> stuck <*> allM (discontinued thisPart) (snd <$> Map.toList priority)
 --   where
 --     stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (pixDirections this)
 --     discontinued thisPart Continue{cursor=c} =
@@ -439,20 +439,20 @@ solve' progressInit@Progress{iter, depth, maze} = do
   (progress@Progress{priority, continues}, continue) <- findContinue progressInit
 
   rotations <- pieceRotations maze (cursor continue)
-  guesses <- removeDead . map ((, (priority, continues)) . ($ continue) . set charL) $ rotations
+  guesses <- removeDead . map ((, progress) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
   (if last then pure else solve') progress'
   where
     last = depth == mazeSize maze - 1
-    -- removeDead = if last then pure else filterM (fmap not . pieceDead maze)
+    -- removeDead = if last then pure else filterM (fmap not . pieceDead maze . (_2 %~ priority))
     removeDead = pure
 
     backtrack :: Progress -> IO (Progress, Continue)
     backtrack Progress{space=[]} = error "unlikely" -- for solvable mazes
     backtrack p@Progress{space=([]:space)} = progressPop p { space } >>= backtrack
-    backtrack p@Progress{space=(((continue, (priority, continues)):guesses):space)} =
-      pure (p { priority, continues, space = guesses : space }, continue)
+    backtrack p@Progress{space=(((continue, Progress{depth, priority, continues}):guesses):space)} =
+      pure (p { depth, priority, continues, space = guesses : space }, continue)
 
 solve :: MMaze -> IO MMaze
 solve m = do
