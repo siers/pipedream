@@ -365,7 +365,7 @@ cursorToContinue maze iter Continue{char, origin} ((_, !c@(x, y), !direction), i
   let
     direct = char `Bit.testBit` direction
     origin' = if direct then origin else c
-    scoreCoeff = 15
+    scoreCoeff = 100000
     score = (x + y + choices * scoreCoeff)
   pure $ Continue c pixUnset origin' direct score (iter * 4 + index)
 
