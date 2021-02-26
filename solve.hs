@@ -4,7 +4,7 @@
 {-# OPTIONS_GHC -O #-}
 
 #ifndef TRACE
-#define TRACE 0
+#define TRACE 1
 #endif
 
 #ifndef FREQ
@@ -439,16 +439,17 @@ findContinue p@Progress{maze, priority, continues} = do
   where ((_, continue@Continue{cursor}), priority') = Map.deleteFindMin priority
 
 -- Solves pieces by backtracking, stops when maze is solved.
-solve' :: Progress -> IO Progress
+solve' :: Int -> Progress -> IO Progress
 -- solve' Progress{priority=[]} = error "unlikely"
-solve' progressInit@Progress{iter, depth, maze} = do
+solve' lifespan progressInit@Progress{iter, depth, maze} = do
   (progress@Progress{priority, continues, components}, continue) <- findContinue progressInit
 
   rotations <- pieceRotations maze (cursor continue)
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  (if last then pure else solve') progress'
+  let stop = last || (lifespan - iter) == 0
+  (if stop then pure else solve' (lifespan - 1)) progress'
   where
     last = depth == mazeSize maze - 1
     removeDead components = if last then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
@@ -461,8 +462,8 @@ solve' progressInit@Progress{iter, depth, maze} = do
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  solved@Progress{iter, depth} <- solve' $
-    Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) pixUnset (0, 0) True 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] m
+  solved@Progress{iter, depth} <- solve' (-1) $
+    Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) pixUnset (0, 0) True 0 0)) Map.empty (Map.fromList [((999, 0), 1)]) [] [] m
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
