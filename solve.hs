@@ -120,13 +120,6 @@ instance Show Progress where
 instance Show MMaze where
   show _ = "MMaze"
 
-{--- Generic functions ---}
-
--- | Monadic 'dropWhile' from monad-loops package
-dropWhileM :: (Monad m) => (a -> m Bool) -> [a] -> m [a]
-dropWhileM _ []     = return []
-dropWhileM p (x:xs) = p x >>= \q -> if q then dropWhileM p xs else return (x:xs)
-
 {--- MMaze and Matrix operations ---}
 
 parse :: String -> IO MMaze
@@ -410,6 +403,11 @@ progressPop :: Progress -> IO Progress
 progressPop p@Progress{maze, unwinds=(unwind:unwinds)} = do
   p { unwinds } <$ mazePop maze unwind
 
+findContinue :: Progress -> IO (Progress, Continue)
+findContinue p@Progress{maze, priority, continues} = do
+  pure . (, continue) $ p { priority = priority' , continues = Map.delete cursor continues }
+  where ((_, continue@Continue{cursor}), priority') = Map.deleteFindMin priority
+
 {--- Solver ---}
 
 -- Solves a valid piece, mutates the maze and sets unwind
@@ -432,11 +430,6 @@ solveContinue
       & continuesL .~ newContinues
       & componentsL .~ newComponents
       & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
-
-findContinue :: Progress -> IO (Progress, Continue)
-findContinue p@Progress{maze, priority, continues} = do
-  pure . (, continue) $ p { priority = priority' , continues = Map.delete cursor continues }
-  where ((_, continue@Continue{cursor}), priority') = Map.deleteFindMin priority
 
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Int -> Progress -> IO Progress
@@ -467,6 +460,8 @@ solve m = do
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   pure (maze solved)
 
+{--- Main ---}
+
 verify :: MMaze -> IO Bool
 verify maze = do
   (mazeSize maze ==) <$> partFollow maze S.empty [(0, 0)]
@@ -489,8 +484,6 @@ storeBad level original solved = do
     putStrLn (printf "storing bad level %i solve" level)
     mazeStore original ("samples/bad-" ++ show level)
   pure solved
-
-{--- Main ---}
 
 rotateStr :: MMaze -> MMaze -> IO Text
 rotateStr input solved = concatenate <$> rotations input solved
