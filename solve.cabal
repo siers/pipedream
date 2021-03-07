@@ -15,6 +15,7 @@ executable solve
       base
     , containers
     , extra
+    , hip
     , lens
     , network
     , primitive

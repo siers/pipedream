@@ -11,18 +11,18 @@
 #define FREQ 3000
 #endif
 
-module Main where
+module Main (main) where
 
 -- solver
 
 import Control.Lens ((&), (%~), (.~), set, view, _1, _2)
 import Control.Lens.TH
 import Control.Monad.Extra (allM, whenM)
-import Control.Monad (join, mplus, mfilter, filterM, void)
+import Control.Monad (join, filterM, void, when, mfilter)
 import Control.Monad.Primitive (RealWorld)
 import Data.Foldable (fold)
 import Data.Function (on)
-import Data.List (find, elemIndex, foldl', nub)
+import Data.List (elemIndex, foldl', nub)
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust)
 import Data.Monoid (Sum(..))
@@ -32,13 +32,14 @@ import Data.Tuple (swap)
 import Data.Vector.Mutable (MVector)
 import Data.Word (Word8)
 import Debug.Trace (trace)
+import Graphics.Image.Interface (thaw, MImage, freeze, write)
+import Graphics.Image (writeImage, makeImageR, Pixel(..), toPixelRGB, VU(..), RGB)
 import qualified Data.Bits as Bit
 import qualified Data.Map as Map
 import qualified Data.Set as S
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import System.Environment (lookupEnv, getArgs)
-import System.IO.Unsafe
 import Text.Printf (printf)
 
 -- IO
@@ -187,33 +188,49 @@ partEquate maze@MMaze{board} v = loop' =<< find v
     find f = (\Piece{connected, partId} -> if connected then partId else f) <$> mazeRead maze f
     loop' v' = (\found -> if v' == v || v' == found then pure v' else loop' found) =<< find v'
 
-partEquateUnsafe :: MMaze -> PartId -> PartId
-partEquateUnsafe m p = unsafePerformIO $ partEquate m p
-
 {--- Rendering, tracing ---}
+
+renderImage :: String -> MMaze -> IO ()
+renderImage fn maze@MMaze{width, height} = do
+  mcanvas <- thaw canvas :: IO (MImage RealWorld VU RGB Double)
+  traverse (drawPiece mcanvas) grid
+  writeImage fn =<< freeze mcanvas
+  where
+    (pw, ph) = (3, 3)
+    canvas = makeImageR VU (width * pw, height * ph) $ const (PixelRGB 0 0 0)
+    grid = [0..width - 1] >>= \x -> [0..height - 1] >>= \y -> [(x, y)]
+
+    colorHash :: Cursor -> Double
+    colorHash (x, y) =
+      let
+        n = ((7 * fromIntegral x) / (11 * fromIntegral (y + 1))) + 0.5
+        unfloor m = m - fromIntegral (floor m)
+      in unfloor $ (unfloor n) / 4 - 0.15
+
+    drawPiece :: MImage RealWorld VU RGB Double -> PartId -> IO ()
+    drawPiece image cur@(x, y) = do
+      piece@Piece{pipe, partId, solved} <- mazeRead maze cur
+      color <- colorHash <$> partEquate maze partId
+      let fill = toPixelRGB $ PixelHSI color (if solved then 0.9 else 0) 1
+      write image (x * pw + 1, y * ph + 1) fill
+      flip traverse_ (pixDirections pipe) $ \d ->
+        when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
+
+renderImage' :: String -> Progress -> IO ()
+renderImage' suffix Progress{maze=maze@MMaze{width}, depth} =
+  renderImage (printf "images/lvl%i-%s-%i.png" level suffix depth) maze
+  where level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)]) :: Int
 
 renderWithPositions :: Maybe Continue -> Progress -> IO String
 renderWithPositions current Progress{depth, maze=maze@MMaze{board, width, height}, priority} =
-  unlines . map concat . vectorLists width height . V.imap fmt . V.convert <$> V.freeze board
+  pure . unlines . map concat . vectorLists width height =<< V.imapM fmt . V.convert =<< V.freeze board
   where
-    colorHash = (+15) . (\(x, y) -> x * 67 + y * 23)
-
-    color256 = (printf "\x1b[38;5;%im" . ([24 :: Int, 27..231] !!)) . (`mod` 70) . colorHash :: Cursor -> String
-    colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partEquateUnsafe maze partId) else Nothing
-
-    -- color256 = (printf "\x1b[38;5;%im" . (\c -> if c == 15 then 8 :: Int else 9)) . colorHash :: Cursor -> String
-    -- colorPart cur Piece{solved, partId} = if solved then Just (color256 $ partId) else Nothing
-
-    colorHead cur = printf "\x1b[31m" <$ ((cur ==) `mfilter` (cursor <$> current))
-    colorContinues cur = printf "\x1b[32m" <$ find ((cur ==) . cursor) priority
-    -- colorContinues cur = color256 . origin <$> find ((cur ==) . cursor) priority
-
-    color :: Cursor -> Piece -> Maybe String
-    -- color cur piece = colorHead cur `mplus` colorContinues cur
-    color cur piece = colorHead cur `mplus` colorPart cur piece `mplus` colorContinues cur
-
-    fmt idx piece@Piece{pipe} =
-      printf $ fromMaybe (toChar pipe : []) . fmap (\c -> printf "%s%c\x1b[39m" c (toChar pipe)) $ color (mazeCursor maze idx) piece
+    colorHash = (`mod` 70) . (+15) . (\(x, y) -> x * 67 + y * 23)
+    fmt idx piece@Piece{pipe, partId, solved} = do
+      color <- mfilter (\_ -> solved) . Just . colorHash <$> partEquate maze partId
+      pure $ case color of
+        Just color -> printf "\x1b[38;5;%im%c\x1b[39m" ([24 :: Int, 27..231] !! color) (toChar pipe)
+        otherwise -> (toChar pipe) : []
 
 render :: MMaze -> IO ()
 render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 Map.empty Map.empty Map.empty [] []
@@ -224,7 +241,7 @@ renderStr MMaze{board, width, height} = do
   <$> V.freeze board
 
 traceBoard :: Continue -> Progress -> IO Progress
-traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
+traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{width, board}} = do
   let mode = TRACE
   let freq = FREQ
   tracer mode freq *> pure progress
@@ -233,6 +250,7 @@ traceBoard current progress@Progress{iter, depth, maze=maze@MMaze{board}} = do
       | iter `mod` freq == 0 && mode == 1 = pure solvedStr >>= putStrLn
       | iter `mod` freq == 0 && mode == 2 = ((clear ++) <$> traceStr) >>= putStrLn
       | iter `mod` freq == 0 && mode == 3 = traceStr >>= putStrLn
+      | iter `mod` freq == 0 && mode == 4 = void $ renderImage' (show iter) progress
       | True = pure ()
 
     percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
@@ -441,7 +459,7 @@ solve' lifespan progressInit@Progress{iter, depth, maze} = do
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  let stop = last || (lifespan - iter) == 0
+  let stop = last || (lifespan - iter) == 0 --  || (iter > 2 && length guesses /= 1)
   (if stop then pure else solve' (lifespan - 1)) progress'
   where
     last = depth == mazeSize maze - 1
@@ -455,10 +473,11 @@ solve' lifespan progressInit@Progress{iter, depth, maze} = do
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  solved@Progress{iter, depth} <- solve' (-1) $
+  solved@Progress{iter, depth, maze} <- solve' (-1) $
     Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) pixUnset (0, 0) True 0 0)) Map.empty (Map.fromList [((999, 0), 1)]) [] [] m
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
-  pure (maze solved)
+  renderImage' "done" solved
+  pure maze
 
 {--- Main ---}
 

@@ -5,6 +5,7 @@ let
     base
     containers
     extra
+    hip
     lens
     network
     primitive
