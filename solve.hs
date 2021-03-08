@@ -102,6 +102,9 @@ type Components = Map PartId Int
 type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
 
+-- Generic piece for the "fill" (think ms paint) operation
+type FillNext = MMaze -> (Cursor -> Piece -> [(Piece, Direction)] -> IO [Cursor])
+
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
   , depth :: Int -- number of solves, so also the length of unwinds/space
@@ -330,8 +333,7 @@ mazeDeltaWall m !c !dir =
   if mazeBounded m delta
   then (, dir) <$> mazeRead m delta
   else pure (Piece 0 True (0, 0) True, dir)
-  where
-    delta = cursorDelta c dir
+  where delta = cursorDelta c dir
 
 {--- Solver bits ---}
 
@@ -477,19 +479,24 @@ solve m = do
 
 verify :: MMaze -> IO Bool
 verify maze = do
-  (mazeSize maze ==) <$> partFollow maze S.empty [(0, 0)]
+  (mazeSize maze ==) <$> validCount maze
   where
-    partFollow :: MMaze -> Set Cursor -> [Cursor] -> IO Int
-    partFollow _maze visited [] = pure (S.size visited)
-    partFollow maze visited (cursor:next) = do
-      this <- pipe <$> mazeRead maze cursor
-      valid <- validateRotation this <$> mazeDeltasWalls maze cursor <*> pure 0
-      if not valid
-      then pure (S.size visited)
-      else do
-        deltas <- mazeDeltas maze cursor (pixDirections this)
-        deltas' <- filter (not . flip S.member visited) . map (view _2) <$> pure deltas
-        partFollow maze (S.insert cursor visited) (deltas' ++ next)
+    -- assumptions: current piece is considered valid by pred
+    fillSize :: FillNext -> MMaze -> Set Cursor -> [Cursor] -> IO Int
+    fillSize _ _ visited [] = pure (S.size visited)
+    fillSize pred maze visited (cursor:next) = do
+      this <- mazeRead maze cursor
+      more <- pred maze cursor this =<< mazeDeltasWalls maze cursor
+      let next' = (filter (not . flip S.member visited) more) ++ next
+      fillSize pred maze (S.insert cursor visited) next'
+
+    predValid :: FillNext
+    predValid maze cur Piece{pipe=this} deltasWalls = pure $
+      if validateRotation this deltasWalls 0
+      then filter (mazeBounded maze) . map (cursorDelta cur) $ pixDirections this
+      else []
+
+    validCount maze = fillSize predValid maze S.empty [(0, 0)]
 
 storeBad :: Int -> MMaze -> MMaze -> IO MMaze
 storeBad level original solved = do
