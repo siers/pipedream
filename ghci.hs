@@ -16,10 +16,20 @@ partEquate m (2,2)
 -- 2021-02-22-20:19:16
 
 :l solve
+a <- parse =<< readFile "samples/5-1"
+p <- pure $ Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) True 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] a
+q <- solve' (-1) p
+renderImage' "debug" q
+
+import qualified Data.List as L
+fmap (L.sort . L.nub) . traverse (fillSize fillNextSolved (maze q) S.empty . pure) . map (cursor . snd) . Map.toList $ priority q
+-- unique island sizes (slightly smaller number than the number of islands, but close)
+-- [6,8,10,11,12,14,16,19,20,21,23,24,25,27,37,45,65,66,76,96,117,226,232]
+map (uncurry (+) . cursor . snd) . Map.toList $ priority q
+-- number of unique cursors
+-- [68,69,70,71,72,73,74,75,76,77,...
+
 uniq = foldr uniq' [] where uniq' x acc = x : dropWhile (== x) acc
-a <- parse =<< readFile "samples/6"
-p <- pure $ Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) pixUnset (0, 0) True 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] a
-q <- solve' 100000 p
 (iter q, depth q, length (space q))
 uniq (map length (space q))
 length $ filter (== 1) (map length (space q))

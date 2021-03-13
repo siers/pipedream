@@ -103,7 +103,7 @@ type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
 
 -- Generic piece for the "fill" (think ms paint) operation
-type FillNext = MMaze -> (Cursor -> Piece -> [(Piece, Direction)] -> IO [Cursor])
+type FillNext = MMaze -> Cursor -> Piece -> [(Piece, Direction)] -> IO [Cursor]
 
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
@@ -417,10 +417,24 @@ progressPop :: Progress -> IO Progress
 progressPop p@Progress{maze, unwinds=(unwind:unwinds)} = do
   p { unwinds } <$ mazePop maze unwind
 
+-- assumptions: no solved or duplicate continues (per cursor) in priority
 findContinue :: Progress -> IO (Progress, Continue)
 findContinue p@Progress{priority, continues} = do
   pure . (, continue) $ p { priority = priority' , continues = Map.delete cursor continues }
   where ((_, continue@Continue{cursor}), priority') = Map.deleteFindMin priority
+
+-- assumptions: current piece is considered valid by fillNext
+fillSize :: FillNext -> MMaze -> Set Cursor -> [Cursor] -> IO (Set Cursor)
+fillSize _ _ visited [] = pure visited
+fillSize fillNext maze visited (cursor:next) = do
+  this <- mazeRead maze cursor
+  more <- fillNext maze cursor this =<< mazeDeltasWalls maze cursor
+  let next' = (filter (not . flip S.member visited) more) ++ next
+  fillSize fillNext maze (S.insert cursor visited) next'
+
+fillNextSolved :: FillNext
+fillNextSolved _ cur _ deltasWall =
+  pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
 {--- Solver ---}
 
@@ -479,24 +493,13 @@ solve m = do
 
 verify :: MMaze -> IO Bool
 verify maze = do
-  (mazeSize maze ==) <$> validCount maze
+  (mazeSize maze ==) . S.size <$> fillSize fillNextValid maze S.empty [(0, 0)]
   where
-    -- assumptions: current piece is considered valid by pred
-    fillSize :: FillNext -> MMaze -> Set Cursor -> [Cursor] -> IO Int
-    fillSize _ _ visited [] = pure (S.size visited)
-    fillSize pred maze visited (cursor:next) = do
-      this <- mazeRead maze cursor
-      more <- pred maze cursor this =<< mazeDeltasWalls maze cursor
-      let next' = (filter (not . flip S.member visited) more) ++ next
-      fillSize pred maze (S.insert cursor visited) next'
-
-    predValid :: FillNext
-    predValid maze cur Piece{pipe=this} deltasWalls = pure $
+    fillNextValid :: FillNext
+    fillNextValid maze cur Piece{pipe=this} deltasWalls = pure $
       if validateRotation this deltasWalls 0
       then filter (mazeBounded maze) . map (cursorDelta cur) $ pixDirections this
       else []
-
-    validCount maze = fillSize predValid maze S.empty [(0, 0)]
 
 storeBad :: Int -> MMaze -> MMaze -> IO MMaze
 storeBad level original solved = do
