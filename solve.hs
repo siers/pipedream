@@ -195,7 +195,7 @@ renderImage fn maze@MMaze{width, height} = do
   where
     (pw, ph) = (3, 3)
     canvas = makeImageR VU (width * pw, height * ph) $ const (PixelRGB 0 0 0)
-    grid = [0..width - 1] >>= \x -> [0..height - 1] >>= \y -> [(x, y)]
+    grid = (,) <$> [0..width - 1] <*> [0..height - 1]
 
     colorHash :: Cursor -> Double
     colorHash (x, y) =
