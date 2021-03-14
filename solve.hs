@@ -17,7 +17,7 @@ module Main (main) where
 
 -- solver
 
-import Control.Lens ((&), (%~), (.~), set, view, _1, _2)
+import Control.Lens ((&), (%~), set, view, _1, _2)
 import Control.Lens.TH
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad (join, filterM, void, when, mfilter)
@@ -376,16 +376,15 @@ cursorToContinue maze iter Continue{char, origin} ((_, !c@(x, y), !direction), i
     pixUnset = 0
   pure $ Continue c pixUnset origin' direct score (iter * 4 + index)
 
-updatePriority :: Progress -> Continue -> IO ((Priority, Components), Continues)
-updatePriority
-  Progress{iter, maze, priority, continues, components}
-  continue@Continue{cursor=cur} = do
-    deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
-    next <- traverse (cursorToContinue maze iter continue) (zip deltas [0..])
-    pure $ foldl'
-      (\(acc, continues) c@Continue{cursor} -> Map.alterF (insertContinue acc c) cursor continues)
-      ((priority, components), continues)
-      next
+prioritizeDeltas :: Progress -> Continue -> IO Progress
+prioritizeDeltas progress@Progress{iter, maze} continue@Continue{cursor=cur} = do
+  deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
+  prioritizeContinues progress <$> traverse (cursorToContinue maze iter continue) (zip deltas [0..])
+
+prioritizeContinues :: Progress -> [Continue] -> Progress
+prioritizeContinues progress@Progress{priority, continues, components} next =
+  (\((priority, components), continues) -> progress { priority, components, continues }) $
+    foldl' foldContinue ((priority, components), continues) next
   where
     cinsert c = Map.insert (cscore c) c :: Priority -> Priority
     cscore Continue{score, created} = (score, created)
@@ -396,6 +395,7 @@ updatePriority
         (_newOrigin, putback) = originL (dupe . min origin) exists { score }
         contModify = if cscore new < cscore exists then cinsert putback . Map.delete (cscore exists) else id
       in ((contModify p, c), Just putback)
+    foldContinue (acc, continues) c@Continue{cursor} = Map.alterF (insertContinue acc c) cursor continues
 
 componentRemove :: PartId -> Components -> Components
 componentRemove part c = Map.update (\a -> if a == 0 then Nothing else Just (a - 1)) part c
@@ -449,15 +449,9 @@ solveContinue
     origin' <- pure . minimum $ neighbours
     components' <- componentEquate origin' (filter (/= origin') (nub neighbours)) (componentRemove thisPart components)
     unwindEquate <- mazeEquate maze origin' neighbours
-    ((newPriority, newComponents), newContinues) <- updatePriority progress { components = components' } continue { origin = origin' }
+    progress' <- prioritizeDeltas progress { components = components' } continue { origin = origin' }
 
-    traceBoard continue $ progress
-      & iterL %~ (+1)
-      & depthL %~ (+1)
-      & priorityL .~ newPriority
-      & continuesL .~ newContinues
-      & componentsL .~ newComponents
-      & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
+    traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
 
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Int -> Progress -> IO Progress
