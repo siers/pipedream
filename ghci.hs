@@ -46,3 +46,11 @@ let grad_gray = makeImageR VU (200, 200) (\(i, j) -> PixelY (fromIntegral i) / 2
 let grad_color = makeImageR VU (200, 200) (\(i, j) -> PixelRGB (fromIntegral i) (fromIntegral j) (fromIntegral (i + j))) / 400
 writeImage "images/grad_color.png" grad_color
 writeImage "images/x.png" $ makeImageR VU (200, 200) (\(i, j) -> toPixelRGB $ PixelHSI 0 1 (fromIntegral (i+j)/400))
+
+-- 2021-03-14-18:20:50
+
+import Control.Lens.Internal.FieldTH (makeFieldOptics, LensRules(..))
+import Language.Haskell.TH.Syntax (mkName, nameBase)
+import Control.Lens.TH (DefName(..), lensRules)
+suffixLNamer = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase)
+:t makeFieldOptics lensRules { _fieldToDef = suffixLNamer }

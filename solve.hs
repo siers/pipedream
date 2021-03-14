@@ -13,12 +13,15 @@
 #define FREQ 3000
 #endif
 
-module Main (main) where
+module Main (main, render) where
 
 -- solver
 
+import Control.Lens.Internal.FieldTH (makeFieldOptics, LensRules(..))
+import Language.Haskell.TH.Syntax (mkName, nameBase)
+import Control.Lens.TH (DefName(..), lensRules)
+
 import Control.Lens ((&), (%~), set, view, _1, _2)
-import Control.Lens.TH
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad (join, filterM, void, when, mfilter)
 import Control.Monad.Primitive (RealWorld)
@@ -118,8 +121,8 @@ data Progress = Progress
   , maze :: MMaze
   }
 
-makeLensesFor ((\n -> (n, n ++ "L")) <$> ["cursor", "char", "origin", "direct", "score", "created"]) ''Continue
-makeLensesFor ((\n -> (n, n ++ "L")) <$> ["iter", "depth", "priority", "continues", "components", "space", "unwinds", "maze"]) ''Progress
+makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Continue
+makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Progress
 
 instance Show Progress where
   show Progress{iter, priority} =
