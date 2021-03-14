@@ -22,6 +22,8 @@ import Control.Lens.TH
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad (join, filterM, void, when, mfilter)
 import Control.Monad.Primitive (RealWorld)
+import Control.Monad.Trans.State.Strict (StateT(..), runStateT)
+import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (fold)
 import Data.Function (on)
 import Data.List (elemIndex, foldl', nub)
@@ -103,7 +105,7 @@ type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
 
 -- Generic piece for the "fill" (think ms paint) operation
-type FillNext = MMaze -> Cursor -> Piece -> [(Piece, Direction)] -> IO [Cursor]
+type FillNext s = MMaze -> Cursor -> Piece -> [(Piece, Direction)] -> StateT s IO [Cursor]
 
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
@@ -423,16 +425,20 @@ findContinue p@Progress{priority, continues} = do
   pure . (, continue) $ p { priority = priority' , continues = Map.delete cursor continues }
   where ((_, continue@Continue{cursor}), priority') = Map.deleteFindMin priority
 
+-- paint-like fill with the generic function fillNext as "paint"
 -- assumptions: current piece is considered valid by fillNext
-fillSize :: FillNext -> MMaze -> Set Cursor -> [Cursor] -> IO (Set Cursor)
-fillSize _ _ visited [] = pure visited
-fillSize fillNext maze visited (cursor:next) = do
-  this <- mazeRead maze cursor
-  more <- fillNext maze cursor this =<< mazeDeltasWalls maze cursor
-  let next' = (filter (not . flip S.member visited) more) ++ next
-  fillSize fillNext maze (S.insert cursor visited) next'
+fillSize :: Monoid s => FillNext s -> MMaze -> Cursor -> IO (Set Cursor, s)
+fillSize n m = flip runStateT mempty . fillSize' n m S.empty . return
+  where
+  fillSize' :: FillNext s -> MMaze -> Set Cursor -> [Cursor] -> StateT s IO (Set Cursor)
+  fillSize' _ _ visited [] = pure visited
+  fillSize' fillNext maze visited (cursor:next) = do
+    this <- liftIO (mazeRead maze cursor)
+    more <- fillNext maze cursor this =<< liftIO (mazeDeltasWalls maze cursor)
+    let next' = (filter (not . flip S.member visited) more) ++ next
+    fillSize' fillNext maze (S.insert cursor visited) next'
 
-fillNextSolved :: FillNext
+fillNextSolved :: FillNext ()
 fillNextSolved _ cur _ deltasWall =
   pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
@@ -463,7 +469,7 @@ solve' lifespan progressInit@Progress{iter, depth, maze} = do
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  let stop = last || (lifespan - iter) == 0 --  || (iter > 2 && length guesses /= 1)
+  let stop = last || (lifespan - iter) == 0 || (iter > 2 && length guesses /= 1)
   (if stop then pure else solve' (lifespan - 1)) progress'
   where
     last = depth == mazeSize maze - 1
@@ -487,9 +493,9 @@ solve m = do
 
 verify :: MMaze -> IO Bool
 verify maze = do
-  (mazeSize maze ==) . S.size <$> fillSize fillNextValid maze S.empty [(0, 0)]
+  (mazeSize maze ==) . S.size . fst <$> fillSize fillNextValid maze (0, 0)
   where
-    fillNextValid :: FillNext
+    fillNextValid :: FillNext ()
     fillNextValid maze cur Piece{pipe=this} deltasWalls = pure $
       if validateRotation this deltasWalls 0
       then filter (mazeBounded maze) . map (cursorDelta cur) $ pixDirections this
