@@ -23,11 +23,11 @@ import Control.Lens.TH (DefName(..), lensRules)
 
 import Control.Lens ((&), (%~), set, view, _1, _2)
 import Control.Monad.Extra (allM, whenM)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad (join, filterM, void, when, mfilter)
 import Control.Monad.Primitive (RealWorld)
-import Control.Monad.Trans.State.Strict (StateT(..), runStateT)
-import Control.Monad.IO.Class (liftIO)
-import Data.Foldable (fold, traverse_, for_)
+import Control.Monad.Trans.State.Strict (StateT(..))
+import Data.Foldable (fold, traverse_, for_, foldrM)
 import Data.Function (on)
 import Data.List (elemIndex, foldl', nub)
 import Data.Map (Map, (!))
@@ -41,9 +41,10 @@ import Data.Word (Word8)
 -- import Debug.Trace (trace)
 import Graphics.Image.Interface (thaw, MImage, freeze, write)
 import Graphics.Image (writeImage, makeImageR, Pixel(..), toPixelRGB, VU(..), RGB)
+import qualified Control.Monad.Trans.State.Strict as State
 import qualified Data.Bits as Bit
 import qualified Data.Map as Map
-import qualified Data.Set as S
+import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import System.Environment (lookupEnv, getArgs)
@@ -90,11 +91,11 @@ data MMaze = MMaze -- Mutable Maze
 -- Continues in Progress may turn out to be already solved, which must be checked
 data Continue = Continue
   { cursor :: Cursor
-  , char :: Pix -- defaulted to ' ', but set when guessing
+  , char :: Pix -- defaulted to 0 (i.e. ' '), but set when guessing
   , origin :: PartId
-  , direct :: Bool -- created by direct pointing from a solved piece
   , score :: Int
-  , created :: Int -- unique ID for Ord, particularly: created = Progress.iter
+  , created :: Int -- unique ID for Ord (total order), taken from Progress.iter
+  , choices :: Int -- number of valid rotations
   } deriving Show
 
 type Score = (Int, Int) -- score, created
@@ -370,15 +371,9 @@ pieceRotationCount maze cur = do
   fmap length . filterM (validateRotationM maze cur this) $ pixRotations this
 
 cursorToContinue :: MMaze -> Int -> Continue -> (PieceDelta, Int) -> IO Continue
-cursorToContinue maze iter Continue{char, origin} ((_, !c@(x, y), !direction), index) = do
-  choices <- pieceRotationCount maze c
-  let
-    direct = char `Bit.testBit` direction
-    origin' = if direct then origin else c
-    scoreCoeff = 100000
-    score = (x + y + choices * scoreCoeff)
-    pixUnset = 0
-  pure $ Continue c pixUnset origin' direct score (iter * 4 + index)
+cursorToContinue maze iter Continue{char, origin} ((_, c, !direction), index) = do
+  let origin' = if char `Bit.testBit` direction then origin else c
+  Continue c 0 origin' 0 (iter * 4 + index) <$> pieceRotationCount maze c
 
 prioritizeDeltas :: Progress -> Continue -> IO Progress
 prioritizeDeltas progress@Progress{iter, maze} continue@Continue{cursor=cur} = do
@@ -388,8 +383,9 @@ prioritizeDeltas progress@Progress{iter, maze} continue@Continue{cursor=cur} = d
 prioritizeContinues :: Progress -> [Continue] -> Progress
 prioritizeContinues progress@Progress{priority, continues, components} next =
   (\((priority, components), continues) -> progress { priority, components, continues }) $
-    foldl' foldContinue ((priority, components), continues) next
+    foldl' foldContinue ((priority, components), continues) $ map rescore next
   where
+    rescore c@Continue{cursor=(x, y), choices} = c { score = x + y + choices * 2^20 }
     cinsert c = Map.insert (cscore c) c :: Priority -> Priority
     cscore Continue{score, created} = (score, created)
     insertContinue :: (Priority, Components) -> Continue -> Maybe Continue -> ((Priority, Components), Maybe Continue)
@@ -430,19 +426,31 @@ findContinue p@Progress{priority, continues} = do
 -- paint-like fill with the generic function fillNext as "paint"
 -- assumptions: current piece is considered valid by fillNext
 fillSize :: Monoid s => FillNext s -> MMaze -> Cursor -> IO (Set Cursor, s)
-fillSize n m = flip runStateT mempty . fillSize' n m S.empty . return
+fillSize n m = flip runStateT mempty . fillSize' n m Set.empty . return
   where
   fillSize' :: FillNext s -> MMaze -> Set Cursor -> [Cursor] -> StateT s IO (Set Cursor)
   fillSize' _ _ visited [] = pure visited
   fillSize' fillNext maze visited (cursor:next) = do
     this <- liftIO (mazeRead maze cursor)
     more <- fillNext maze cursor this =<< liftIO (mazeDeltasWalls maze cursor)
-    let next' = (filter (not . flip S.member visited) more) ++ next
-    fillSize' fillNext maze (S.insert cursor visited) next'
+    let next' = filter (not . flip Set.member visited) more ++ next
+    fillSize' fillNext maze (Set.insert cursor visited) next'
 
-fillNextSolved :: FillNext ()
-fillNextSolved _ cur _ deltasWall =
-  pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
+islandize :: Progress -> IO Progress
+islandize p@Progress{maze, priority} =
+  fmap snd . foldrM acc (Set.empty, p) $ map (cursor . snd) . Map.toList $ priority
+  where
+    acc cursor t@(visited, p@Progress{continues}) =
+      if (cursor `Set.member` visited)
+      then pure t
+      else do
+        (more, _inhabitants) <- fillSize (fillNextSolved continues) maze cursor
+        pure (visited `Set.union` more, prioritizeContinues p [])
+
+    fillNextSolved :: Continues -> FillNext (Set Cursor)
+    fillNextSolved continues _ cur _ deltasWall = do
+      when (cur `Map.member` continues) $ State.modify (Set.insert cur)
+      pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
 {--- Solver ---}
 
@@ -471,7 +479,7 @@ solve' lifespan progressInit@Progress{iter, depth, maze} = do
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  let stop = last || (lifespan - iter) == 0 || (iter > 2 && length guesses /= 1)
+  let stop = last || (lifespan - iter) == 0   || (iter > 2 && length guesses /= 1)
   (if stop then pure else solve' (lifespan - 1)) progress'
   where
     last = depth == mazeSize maze - 1
@@ -486,7 +494,7 @@ solve' lifespan progressInit@Progress{iter, depth, maze} = do
 solve :: MMaze -> IO MMaze
 solve m = do
   solved@Progress{iter, depth, maze} <- solve' (-1) $
-    Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) True 0 0)) Map.empty (Map.fromList [((999, 0), 1)]) [] [] m
+    Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) 0 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] m
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   renderImage' "done" solved
   pure maze
@@ -495,7 +503,7 @@ solve m = do
 
 verify :: MMaze -> IO Bool
 verify maze = do
-  (mazeSize maze ==) . S.size . fst <$> fillSize fillNextValid maze (0, 0)
+  (mazeSize maze ==) . Set.size . fst <$> fillSize fillNextValid maze (0, 0)
   where
     fillNextValid :: FillNext ()
     fillNextValid maze cur Piece{pipe=this} deltasWalls = pure $

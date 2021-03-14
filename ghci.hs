@@ -17,17 +17,34 @@ partEquate m (2,2)
 
 :l solve
 a <- parse =<< readFile "samples/5-1"
-p <- pure $ Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) True 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] a
+p <- pure $ Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) 0 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] a
 q <- solve' (-1) p
 renderImage' "debug" q
 
 import qualified Data.List as L
-fmap (L.sort . L.nub) . traverse (fillSize fillNextSolved (maze q) S.empty . pure) . map (cursor . snd) . Map.toList $ priority q
+L.sort . map snd . Map.toList <$> islandize' q
 -- unique island sizes (slightly smaller number than the number of islands, but close)
 -- [6,8,10,11,12,14,16,19,20,21,23,24,25,27,37,45,65,66,76,96,117,226,232]
+-- [6,6,6,6,6,6,6,8,8,8,8,8,10,10,10,10,11,12,14,16,19,20,21,23,24,24,25,27,37,37,45,65,66,76,96,117,226,232]
 map (uncurry (+) . cursor . snd) . Map.toList $ priority q
 -- number of unique cursors
 -- [68,69,70,71,72,73,74,75,76,77,...
+
+islandize' :: Progress -> IO (Map Cursor Int)
+islandize' p@Progress{maze, priority} =
+  fmap snd . foldrM acc (Set.empty, Map.empty) $ map (cursor . snd) . Map.toList $ priority
+  where
+    acc cursor t@(visited, m) =
+      if (cursor `Set.member` visited)
+      then pure t
+      else do
+        (more, _inhabitants) <- fillSize (fillNextSolved Map.empty) maze cursor
+        pure (visited `Set.union` more, Map.insert cursor (Set.size more) m)
+
+    fillNextSolved :: Continues -> FillNext (Set Cursor)
+    fillNextSolved continues _ cur _ deltasWall = do
+      when (cur `Map.member` continues) $ State.modify (Set.insert cur)
+      pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
 uniq = foldr uniq' [] where uniq' x acc = x : dropWhile (== x) acc
 (iter q, depth q, length (space q))
