@@ -27,7 +27,7 @@ import Control.Monad (join, filterM, void, when, mfilter)
 import Control.Monad.Primitive (RealWorld)
 import Control.Monad.Trans.State.Strict (StateT(..), runStateT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Foldable (fold)
+import Data.Foldable (fold, traverse_, for_)
 import Data.Function (on)
 import Data.List (elemIndex, foldl', nub)
 import Data.Map (Map, (!))
@@ -51,7 +51,6 @@ import Text.Printf (printf)
 
 -- IO
 
-import Data.Foldable (traverse_)
 import Data.Text (Text)
 import Network.Socket (withSocketsDo)
 import qualified Data.Text as T
@@ -181,7 +180,7 @@ mazeEquate m partId cursors =
   <* traverse (mazeModify m (\p -> p { partId, connected = True })) cursors
 
 mazePop :: MMaze -> Unwind -> IO ()
-mazePop m unwind = uncurry (flip (mazeModify m . const)) `traverse_` unwind
+mazePop m = traverse_ (uncurry (flip (mazeModify m . const)))
 
 -- lookup fixed point (ish) in maze by PartId lookup, stops at first cycle
 partEquate :: MMaze -> PartId -> IO PartId
@@ -215,7 +214,7 @@ renderImage fn maze@MMaze{width, height} = do
       color <- colorHash <$> partEquate maze partId
       let fill = toPixelRGB $ PixelHSI color (if solved then 0.9 else 0) 1
       write image (x * pw + 1, y * ph + 1) fill
-      flip traverse_ (pixDirections pipe) $ \d ->
+      for_ (pixDirections pipe) $ \d ->
         when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
 
 renderImage' :: String -> Progress -> IO ()
@@ -527,7 +526,7 @@ rotateStr input solved = concatenate <$> rotations input solved
         rotations from to = fromJust $ to `elemIndex` iterate (rotate 1) from
 
 pļāpātArWebsocketu :: WS.ClientApp ()
-pļāpātArWebsocketu conn = traverse_ solveLevel [1..6]
+pļāpātArWebsocketu conn = for_ [1..6] solveLevel
   where
     send = WS.sendTextData conn
     recv = T.unpack <$> WS.receiveData conn
