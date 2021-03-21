@@ -17,9 +17,10 @@ partEquate m (2,2)
 
 :l solve
 a <- parse =<< readFile "samples/5-1"
-p <- pure $ Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) 0 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] a
-q <- solve' (-1) p
-renderImage' "debug" q
+p <- pure $ Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) 0 0 0 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] a
+q <- islandize =<< solve' (-1) p
+renderImage' "debug" (fst q)
+nub . map (area . snd) . Map.toList . continues . fst $ q
 
 import qualified Data.List as L
 L.sort . map snd . Map.toList <$> islandize' q

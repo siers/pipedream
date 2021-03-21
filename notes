@@ -186,6 +186,10 @@ visual upgrades:
 • create animation with ffmpeg (use threads for actual drawing, but don't forget to wait for them to finish)
 • B&W with continues only
 
+2021-03-18-18:09:33
+data Continue = Continue { .. + islandWeight :: Int = 0, island :: Boolean = False }
+data Piece = Piece { .. + island :: Boolean = Continue.island }
+
 --
 
 9f9a4fe
