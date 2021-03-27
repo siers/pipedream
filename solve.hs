@@ -224,9 +224,9 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
       for_ (pixDirections pipe) $ \d ->
         when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
 
-renderImage' :: String -> Progress -> IO ()
-renderImage' suffix Progress{maze=maze@MMaze{width}, depth, continues} =
-  renderImage (printf "images/lvl%i-%s-%i.png" level suffix depth) maze continues
+renderImage' :: String -> Progress -> IO Progress
+renderImage' suffix p@Progress{maze=maze@MMaze{width}, iter, continues} =
+  p <$ renderImage (printf "images/lvl%i-%s-%i.png" level suffix iter) maze continues
   where level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)]) :: Int
 
 renderWithPositions :: Maybe Continue -> Progress -> IO String
@@ -379,6 +379,7 @@ pieceRotationCount maze cur = do
 cursorToContinue :: MMaze -> Int -> Continue -> (PieceDelta, Int) -> IO Continue
 cursorToContinue maze iter Continue{char, origin, island, area} ((_, c, !direction), index) = do
   let origin' = if char `Bit.testBit` direction then origin else c
+  -- let island' = min island (island + 1)
   Continue c 0 origin' 0 (iter * 4 + index) island area <$> pieceRotationCount maze c
 
 prioritizeDeltas :: Progress -> Continue -> IO Progress
@@ -446,8 +447,10 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
 
 islandize :: Progress -> IO Progress
 islandize p@Progress{maze, continues} = do
-  (p@Progress{continues}, (_, maxIsland)) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
-  pure . prioritizeContinues p . map (\c -> c { island = 1 }) $ (borderContinues continues maxIsland True)
+  -- (p@Progress{continues}, (_, maxIsland)) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
+  -- print (Set.lookupMin maxIsland)
+  -- pure . prioritizeContinues p . map (\c -> c { island = 1 }) $ (borderContinues continues maxIsland True)
+  fmap fst $ foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
   where
     borderContinues :: Continues -> Set Cursor -> Bool -> [Continue]
     borderContinues continues borders active =
@@ -461,7 +464,7 @@ islandize p@Progress{maze, continues} = do
     perIsland cursor (visited, p@Progress{continues}, max@(maxSize, _)) = do
       (_all, borders :: Set Cursor) <- flood (fillNextSolved continues) maze cursor
       let max' = if Set.size borders > maxSize then (Set.size borders, borders) else max
-      pure (visited `Set.union` borders, prioritizeContinues p (borderContinues continues borders False), max')
+      pure (visited `Set.union` borders, prioritizeContinues p (borderContinues continues borders True), max')
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
     fillNextSolved continues _ cur _ deltasWall = do
@@ -486,17 +489,18 @@ solveContinue
     traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
 
 -- Solves pieces by backtracking, stops when maze is solved.
-solve' :: Int -> Progress -> IO Progress
+solve' :: Int -> Bool -> Progress -> IO Progress
 -- solve' Progress{priority=[]} = error "unlikely"
-solve' lifespan progressInit@Progress{iter, depth, maze} = do
+solve' lifespan first progressInit@Progress{iter, depth, maze} = do
   (progress@Progress{components}, continue) <- findContinue progressInit
 
   rotations <- pieceRotations maze (cursor continue)
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  let stop = last || (lifespan - iter) == 0   || (iter > 2 && length guesses /= 1)
-  (if stop then pure else solve' (lifespan - 1)) progress'
+  let islandish = iter > 2 && length guesses /= 1
+  let stop = last || lifespan == 0 || (islandish && first)
+  (if stop then pure else solve' (lifespan - 1) first) progress'
   where
     last = depth == mazeSize maze - 1
     removeDead components = if last then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
@@ -509,11 +513,15 @@ solve' lifespan progressInit@Progress{iter, depth, maze} = do
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  solved@Progress{iter, depth, maze} <- solve' (-1) $
-    Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) 0 0 0 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] m
+  let init = Continue (0, 0) 0 (0, 0) 0 0 0 0 0
+  let p = Progress 0 0 (Map.singleton (0, 0) init) Map.empty (Map.fromList [((0, 0), 1)]) [] [] m
+  p <- solve' (-1) False =<< islandize =<< image "first" =<< solve' (-1) True p
+  let solved@Progress{iter, depth, maze} = p
+
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   renderImage' "done" solved
   pure maze
+  where image label = renderImage' ("debug-" ++ label)
 
 {--- Main ---}
 
