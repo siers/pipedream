@@ -105,7 +105,7 @@ type Score = (Int, Int) -- score, created
 
 type Priority = Map Score Continue
 type Continues = Map Cursor Continue
-type Components = Map PartId Int
+data Components = Components (Map PartId Int) | Components' (Map PartId (Set Cursor))
 
 type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
@@ -241,7 +241,7 @@ renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} =
         _ -> (toChar pipe) : []
 
 render :: MMaze -> IO ()
-render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 Map.empty Map.empty Map.empty [] []
+render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 Map.empty Map.empty (Components Map.empty) [] []
 
 renderStr :: MMaze -> IO String
 renderStr MMaze{board, width, height} = do
@@ -348,6 +348,30 @@ mazeDeltaWall m !c !dir =
 
 {--- Solver bits ---}
 
+compInsert :: Continue -> Components -> Components
+compInsert Continue{origin} (Components c) = Components (Map.insertWith (+) origin 1 c)
+compInsert Continue{origin, cursor} (Components' c) = Components' (Map.insertWith (Set.union) origin (Set.singleton cursor) c)
+
+compRemove :: PartId -> Cursor -> Components -> Components
+compRemove origin _cursor (Components c) = Components (Map.update (Just . (subtract 1)) origin c)
+compRemove origin cursor (Components' c) = Components' (Map.update (Just . Set.delete cursor) origin c)
+
+compEquate :: PartId -> [PartId] -> Components -> Components
+compEquate hub connections c = equate c
+  where
+    equate (Components c) = Components $ equate' Sum getSum c
+    equate (Components' c) = Components' $ equate' id id c
+
+    equate' :: Monoid m => (a -> m) -> (m -> a) -> Map PartId a -> Map PartId a
+    equate' lift drop c = Map.insertWith (\a b -> drop (lift a <> lift b)) hub (drop sum) removed
+      where (sum, removed) = (foldl' (extract lift) (mempty, c) connections)
+
+    extract lift (sum, m) part = Map.alterF ((, Nothing) . mappend sum . foldMap lift) part m
+
+compAlive :: PartId -> Components -> Bool
+compAlive k (Components c) = (Just 1 ==) $ Map.lookup k c
+compAlive k (Components' c) = (Just 1 ==) . fmap Set.size $ Map.lookup k c
+
 -- given current pixel at rotation, does it match the pixel at direction from it?
 pixValid :: (Pix, Pix, Rotation, Direction) -> Bool
 pixValid (!this, !that, !rotation, !direction) =
@@ -398,7 +422,7 @@ prioritizeContinues progress@Progress{priority, continues, components} next =
     cinsert c = Map.insert (cscore c) c :: Priority -> Priority
     cscore Continue{score, created} = (score, created)
     insertContinue :: (Priority, Components) -> Continue -> Maybe Continue -> ((Priority, Components), Maybe Continue)
-    insertContinue (p, c) new@Continue{origin} Nothing = ((cinsert new p, Map.insertWith (+) origin 1 c), Just new)
+    insertContinue (p, c) new Nothing = ((cinsert new p, compInsert new c), Just new)
     insertContinue (p, c) new@Continue{origin=o} (Just (exists@Continue{origin=o', created})) =
       let
         putback = new { origin = min o o', created }
@@ -406,20 +430,10 @@ prioritizeContinues progress@Progress{priority, continues, components} next =
       in ((contModify p, c), Just putback)
     foldContinue (acc, continues) c@Continue{cursor} = Map.alterF (insertContinue acc c) cursor continues
 
-componentRemove :: PartId -> Components -> Components
-componentRemove part c = Map.update (\a -> if a == 0 then Nothing else Just (a - 1)) part c
-
-componentEquate :: PartId -> [PartId] -> Components -> IO Components
-componentEquate partId join c =
-  let
-    extract (sum, m) part = Map.alterF ((, Nothing) . mappend sum . foldMap Sum) part m
-    (Sum sum, components) = foldl' extract (Sum 0, c) join
-  in pure $ Map.insertWith (+) partId sum components
-
 pieceDead :: MMaze -> Components -> (Continue, Priority) -> IO Bool
 pieceDead maze components (Continue{cursor=cur, char=this}, _) = do
   thisPart <- partEquate maze . partId =<< mazeRead maze cur
-  ((Just 1 == Map.lookup thisPart components) &&) <$> stuck
+  (compAlive thisPart components &&) <$> stuck
   where stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (pixDirections this)
 
 progressPop :: Progress -> IO Progress
@@ -471,18 +485,24 @@ islandize p@Progress{maze, continues} = do
       when (cur `Map.member` continues) $ State.modify (Set.insert cur)
       pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
+-- Progress.components = Components -> Components'
+reconnect :: Progress -> IO Progress
+reconnect p@Progress{maze, continues} = do
+  (\c -> p { components = c }) . Components' . foldr1 (Map.unionWith Set.union) <$> traverse component (Map.toList continues)
+  where component (_, Continue{origin, cursor}) = Map.singleton <$> partEquate maze origin <*> pure (Set.singleton cursor)
+
 {--- Solver ---}
 
 -- Solves a valid piece, mutates the maze and sets unwind
 solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
   progress@Progress{maze, components}
-  continue@Continue{cursor=cur, char=this, origin} = do
+  continue@Continue{cursor, char, origin} = do
     unwindThis <- mazeSolve maze continue
     thisPart <- partEquate maze origin
-    neighbours <- fmap (nub . (thisPart :)) . traverse (partEquate maze) . map (cursorDelta cur) $ (pixDirections this)
+    neighbours <- fmap (nub . (thisPart :)) . traverse (partEquate maze) . map (cursorDelta cursor) $ (pixDirections char)
     origin' <- pure . minimum $ neighbours
-    components' <- componentEquate origin' (filter (/= origin') (nub neighbours)) (componentRemove thisPart components)
+    components' <- pure $ compEquate origin' (filter (/= origin') (nub neighbours)) (compRemove thisPart cursor components)
     unwindEquate <- mazeEquate maze origin' neighbours
     progress' <- prioritizeDeltas progress { components = components' } continue { origin = origin' }
 
@@ -514,8 +534,9 @@ solve' lifespan first progressInit@Progress{iter, depth, maze} = do
 solve :: MMaze -> IO MMaze
 solve m = do
   let init = Continue (0, 0) 0 (0, 0) 0 0 0 0 0
-  let p = Progress 0 0 (Map.singleton (0, 0) init) Map.empty (Map.fromList [((0, 0), 1)]) [] [] m
-  p <- solve' (-1) False =<< islandize =<< image "first" =<< solve' (-1) True p
+  let components = Components (Map.fromList [((0, 0), 1)])
+  let p = Progress 0 0 (Map.singleton (0, 0) init) Map.empty components [] [] m
+  p <- solve' (-1) False =<< reconnect =<< islandize =<< image "first" =<< solve' (-1) True p
   let solved@Progress{iter, depth, maze} = p
 
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))

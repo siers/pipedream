@@ -339,3 +339,10 @@ count of priority queue sizes: (removed solved pieces)
 16 179 => 54 28
 20 180 => 55 30
 ./solve samples/2  0.00s user 0.00s system 92% cpu 0.007 total
+
+on Sun 28 Mar 2021 07:10:32 PM EEST
+data Components =
+  Components (Map PartId Int)
+  ./solve trash/samples/5-{01..10}  19.28s user 0.56s system 99% cpu 19.838 total
+  Components' (Map PartId (Set Cursor))
+  ./solve trash/samples/5-{01..10}  19.62s user 0.58s system 99% cpu 20.200 total
