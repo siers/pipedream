@@ -1,4 +1,4 @@
-{-# LANGUAGE TupleSections, NamedFieldPuns, BinaryLiterals, TemplateHaskell, CPP, ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections, NamedFieldPuns, BinaryLiterals, TemplateHaskell, CPP, ScopedTypeVariables, NumericUnderscores #-}
 
 {-# LANGUAGE StrictData, BangPatterns #-}
 {-# OPTIONS_GHC -O #-}
@@ -10,8 +10,12 @@
 #define TRACE 1
 #endif
 
+#ifndef TRACESUFFIX
+#define TRACESUFFIX ""
+#endif
+
 #ifndef FREQ
-#define FREQ 3000
+#define FREQ 3_000
 #endif
 
 module Main (main, render) where
@@ -228,8 +232,10 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
 
 renderImage' :: String -> Progress -> IO Progress
 renderImage' suffix p@Progress{maze=maze@MMaze{width}, iter, continues} =
-  p <$ renderImage (printf "images/lvl%i-%s-%i.png" level suffix iter) maze continues
-  where level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)]) :: Int
+  p <$ renderImage (printf ("images/lvl%i-%s-%0" ++ show zeros ++ "i.png") level suffix iter) maze continues
+  where
+    zeros = floor (logBase 10 (fromIntegral (mazeSize maze)) + 1.5)
+    level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)]) :: Int
 
 renderWithPositions :: Maybe Continue -> Progress -> IO String
 renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} =
@@ -252,20 +258,20 @@ renderStr MMaze{board, width, height} = do
 
 traceBoard :: Continue -> Progress -> IO Progress
 traceBoard current progress@Progress{iter, depth, maze} = do
-  let mode = TRACE :: Int
-  let freq = FREQ :: Int
-  tracer mode freq *> pure progress
+  let (mode, freq, suffix) = (TRACE :: Int, FREQ :: Int, TRACESUFFIX :: String)
+  tracer mode freq suffix *> pure progress
   where
-    tracer mode freq -- reorder/comment out clauses to disable tracing
+    tracer mode freq s -- reorder/comment out clauses to disable tracing
       | iter `mod` freq == 0 && mode == 1 = pure solvedStr >>= putStrLn
       | iter `mod` freq == 0 && mode == 2 = ((clear ++) <$> traceStr) >>= putStrLn
       | iter `mod` freq == 0 && mode == 3 = traceStr >>= putStrLn
-      | iter `mod` freq == 0 && mode == 4 = void $ renderImage' (show iter) progress
+      | iter `mod` freq == 0 && mode == 4 = tracer 1 freq s >> void (renderImage' ("trace-" ++ s ++ show iter) progress)
       | True = pure ()
 
     percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
     ratio = (fromIntegral iter / fromIntegral depth :: Double)
-    solvedStr = printf "\x1b[2Ksolved: %02.2f%%, ratio: %0.2f\x1b[1A" (percentage * 100 :: Double) ratio :: String
+    islands = length . filter (\(_, Continue{island}) -> island > 0) $ Map.toList (continues progress)
+    solvedStr = printf "\x1b[2Kislands: %i, solved: %02.2f%%, ratio: %0.2f\x1b[1A" islands (percentage * 100 :: Double) ratio :: String
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     traceStr = renderWithPositions (Just current) progress
