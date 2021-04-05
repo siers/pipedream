@@ -458,16 +458,20 @@ prioritizeContinues progress@Progress{priority, continues, components} next =
     rescore c@Continue{cursor=(x, y), choices, island, area} =
       c { score = x + y + choices * 2^15 - (island * 2^10 * area) * 2^17 }
 
+    foldContinue (acc, continues) c@Continue{cursor} = Map.alterF (insertContinue acc c) cursor continues
+
     cinsert c = Map.insert (cscore c) c :: Priority -> Priority
     cscore Continue{score, created} = (score, created)
     insertContinue :: (Priority, Components) -> Continue -> Maybe Continue -> ((Priority, Components), Maybe Continue)
-    insertContinue (p, c) new Nothing = ((cinsert new p, compInsert new c), Just new)
-    insertContinue (p, c) new@Continue{origin=o} (Just (exists@Continue{origin=o', created})) =
-      let
-        putback = new { origin = min o o', created }
-        contModify = if cscore new < cscore exists then cinsert putback . Map.delete (cscore exists) else id
-      in ((contModify p, c), Just putback)
-    foldContinue (acc, continues) c@Continue{cursor} = Map.alterF (insertContinue acc c) cursor continues
+    insertContinue (p, c) new Nothing =
+      ((cinsert new p, compInsert new c), Just new)
+    insertContinue (p, c) new (Just (exists@Continue{created})) =
+      ((contModify p, c), Just putback)
+      where
+        (putback, contModify) =
+          if cscore new < cscore exists
+          then (new { created }, cinsert putback . Map.delete (cscore exists))
+          else (exists, id)
 
 pieceDead :: MMaze -> Components -> (Continue, Priority) -> IO Bool
 pieceDead maze components (Continue{cursor=cur, char=this}, _) = do
