@@ -101,6 +101,8 @@ data MMaze = MMaze -- Mutable Maze
   { board :: MVector RealWorld Piece
   , width :: Int
   , height :: Int
+  , size :: Int
+  , sizeLen :: Int -- leading char count for printf %0ni format
   }
 
 -- Continue represents the piece that should be solved next
@@ -157,19 +159,19 @@ instance ToJSON Continue
 parse :: String -> IO MMaze
 parse input = do
   board <- V.thaw . V.fromList . map (\c -> Piece c False (0, 0) False False) . join $ rect
-  maze <- pure (MMaze board (length (head rect)) (length rect))
+  maze <- pure (MMaze board width height size zeros)
   maze <$ mazeMap maze (\c p -> p { partId = c })
-  where rect = filter (not . null) . map (map toPix) . lines $ input
+  where
+    rect = filter (not . null) . map (map toPix) . lines $ input
+    (width, height) = (length (head rect), (length rect))
+    size = width * height
+    zeros = floor (logBase 10 (fromIntegral size) + 1.5)
 
 mazeStore :: MMaze -> String -> IO ()
 mazeStore m label = writeFile label =<< renderStr m
 
 mazeBounded :: MMaze -> Cursor -> Bool
 mazeBounded MMaze{width, height} (!x, !y) = x >= 0 && y >= 0 && width > x && height > y
-
-{-# INLINE mazeSize #-}
-mazeSize :: MMaze -> Int
-mazeSize MMaze{width, height} = width * height
 
 vectorLists :: Int -> Int -> V.Vector a -> [[a]]
 vectorLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
@@ -243,11 +245,9 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
         when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
 
 renderImage' :: String -> Progress -> IO Progress
-renderImage' suffix p@Progress{maze=maze@MMaze{width}, iter, continues} =
-  p <$ renderImage (printf ("images/lvl%i-%s-%0" ++ show zeros ++ "i.png") level suffix iter) maze continues
-  where
-    zeros = floor (logBase 10 (fromIntegral (mazeSize maze)) + 1.5)
-    level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)]) :: Int
+renderImage' name p@Progress{maze=maze@MMaze{width, sizeLen}, iter, continues} =
+  p <$ renderImage (printf ("images/lvl%i-%s-%0*i.png") level name sizeLen iter) maze continues
+  where level :: Int = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)])
 
 renderWithPositions :: Maybe Continue -> Progress -> IO String
 renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} =
@@ -268,8 +268,14 @@ renderStr MMaze{board, width, height} = do
   unlines . map concat . vectorLists width height . V.map (return . toChar . pipe) . V.convert
   <$> V.freeze board
 
+islandCounts :: Progress -> (Int, Int)
+islandCounts Progress{continues} = bimap getSum getSum . foldMap count $ Map.toList continues
+  where
+    icount i n = Sum (fromEnum (i == n))
+    count (_, Continue{island=i}) = (icount i 2, icount i 1)
+
 traceBoard :: Continue -> Progress -> IO Progress
-traceBoard current progress@Progress{iter, depth, maze} = do
+traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
   let (mode, freq, suffix) = (TRACE :: Int, FREQ :: Int, TRACESUFFIX :: String)
   tracer mode freq suffix *> pure progress
   where
@@ -280,10 +286,10 @@ traceBoard current progress@Progress{iter, depth, maze} = do
       | iter `mod` freq == 0 && mode == 4 = tracer 1 freq s >> void (renderImage' ("trace-" ++ s ++ show iter) progress)
       | True = pure ()
 
-    percentage = (fromIntegral $ depth) / (fromIntegral $ mazeSize maze)
+    perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
     ratio = (fromIntegral iter / fromIntegral depth :: Double)
-    islands = length . filter (\(_, Continue{island}) -> island > 0) $ Map.toList (continues progress)
-    solvedStr = printf "\x1b[2Kislands: %i, solved: %02.2f%%, ratio: %0.2f\x1b[1A" islands (percentage * 100 :: Double) ratio :: String
+    (i, is) = islandCounts progress
+    solvedStr = printf "\x1b[2Kislands: %2i/%2i, solved: %02.2f%%, ratio: %0.2f\x1b[1A" i is perc ratio
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     traceStr = renderWithPositions (Just current) progress
@@ -554,7 +560,7 @@ solveContinue
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Int -> Bool -> Progress -> IO Progress
 -- solve' _ _ p@Progress{priority} | Map.null priority = pure p
-solve' lifespan first progressInit@Progress{iter, depth, maze} = do
+solve' lifespan first progressInit@Progress{iter, depth, maze=maze@MMaze{size}} = do
   (progress@Progress{components}, continue) <- findContinue progressInit
 
   rotations <- pieceRotations maze (cursor continue)
@@ -565,7 +571,7 @@ solve' lifespan first progressInit@Progress{iter, depth, maze} = do
   let stop = last || lifespan == 0 || (islandish && first)
   (if stop then pure else solve' (lifespan - 1) first) progress'
   where
-    last = depth == mazeSize maze - 1
+    last = depth == size - 1
     removeDead components = if last then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
 
     backtrack :: Progress -> IO (Progress, Continue)
@@ -584,14 +590,14 @@ solve m = do
   -- p <- foldrM id p . replicate 5 $ (solve' 100000 False =<<) . renderImage' "debug-04-03-islands"
   let solved@Progress{iter, depth, maze} = p
 
-  putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
+  putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   maze <$ renderImage' "done" solved
 
 {--- Main ---}
 
 verify :: MMaze -> IO Bool
-verify maze = do
-  (mazeSize maze ==) . Set.size . fst <$> flood fillNextValid maze (0, 0)
+verify maze@MMaze{size} = do
+  (size ==) . Set.size . fst <$> flood fillNextValid maze (0, 0)
   where
     fillNextValid :: FillNext ()
     fillNextValid maze cur Piece{pipe=this} deltasWalls = pure $
@@ -642,8 +648,8 @@ pļāpātArWebsocketu conn = for_ [1..6] solveLevel
 
 solveFiles :: String -> IO ()
 solveFiles file = do
-  solve <- solve =<< parse =<< readFile file
-  whenM (not <$> verify solve) (putStrLn "solution invalid")
+  solved <- solve =<< parse =<< readFile file
+  whenM (not <$> verify solved) (putStrLn "solution invalid")
 
 main :: IO ()
 main = do
