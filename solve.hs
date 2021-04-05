@@ -95,6 +95,7 @@ data Piece = Piece
   , partId :: PartId -- meaningless if not connected
   , connected :: Bool -- connected when pointed
   , wasIsland :: Bool -- was this solved by an island Continue?
+  , edge :: Bool -- deltas are bounded, if this isn't an edge piece
   } deriving (Generic, Show)
 
 type PieceDelta = (Piece, Cursor, Direction)
@@ -162,11 +163,13 @@ instance ToJSON Components
 
 parse :: String -> IO MMaze
 parse input = do
-  board <- V.thaw . V.fromList . map (\c -> Piece c False (0, 0) False False) . join $ rect
+  board <- V.thaw . V.fromList . map toPiece . zip [0..] . join $ rect
   maze <- pure (MMaze board width height size zeros level)
   maze <$ mazeMap maze (\c p -> p { partId = c })
   where
-    rect = filter (not . null) . map (map toPix) . lines $ input
+    toPiece (i, c) = Piece c False (0, 0) False False (isEdge (mazeCursor width i))
+    isEdge (x, y) = ((x + 1) `mod` width) < 2 || ((y + 1) `mod` height) < 2
+    rect :: [[Pix]] = filter (not . null) . map (map toPix) . lines $ input
     (width, height) = (length (head rect), (length rect))
     size = width * height
     zeros = floor (logBase 10 (fromIntegral size) + 1.5)
@@ -181,8 +184,8 @@ mazeBounded MMaze{width, height} (!x, !y) = x >= 0 && y >= 0 && width > x && hei
 vectorLists :: Int -> Int -> V.Vector a -> [[a]]
 vectorLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
-mazeCursor :: MMaze -> Int -> Cursor
-mazeCursor MMaze{width} = swap . flip quotRem width
+mazeCursor :: Int -> Int -> Cursor
+mazeCursor width = swap . flip quotRem width
 
 {-# INLINE mazeRead #-}
 mazeRead :: MMaze -> Cursor -> IO Piece
@@ -375,7 +378,7 @@ mazeDeltaWall :: MMaze -> Cursor -> Direction -> IO (Piece, Direction)
 mazeDeltaWall m !c !dir =
   if mazeBounded m delta
   then (, dir) <$> mazeRead m delta
-  else pure (Piece 0 True (0, 0) True False, dir)
+  else pure (Piece 0 True (0, 0) True False True, dir)
   where delta = cursorDelta c dir
 
 {--- Solver bits: per-pixel stuff ---}
@@ -627,8 +630,8 @@ rotateStr input solved = concatenate <$> rotations input solved
       . (>>= (\((x, y), r) -> replicate r (T.pack (printf "%i %i" x y))))
 
     rotations :: MMaze -> MMaze -> IO [(Cursor, Rotation)]
-    rotations maze@MMaze{board=input} MMaze{board=solved} = do
-      V.toList . V.imap (\i -> (mazeCursor maze i, ) . uncurry (rotations `on` pipe))
+    rotations MMaze{width, board=input} MMaze{board=solved} = do
+      V.toList . V.imap (\i -> (mazeCursor width i, ) . uncurry (rotations `on` pipe))
       <$> (V.zip <$> V.freeze input <*> V.freeze solved)
       where
         rotations from to = fromJust $ to `elemIndex` iterate (rotate 1) from
