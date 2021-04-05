@@ -105,6 +105,7 @@ data MMaze = MMaze -- Mutable Maze
   , height :: Int
   , size :: Int
   , sizeLen :: Int -- leading char count for printf %0ni format
+  , level :: Int
   }
 
 -- Continue represents the piece that should be solved next
@@ -162,13 +163,14 @@ instance ToJSON Components
 parse :: String -> IO MMaze
 parse input = do
   board <- V.thaw . V.fromList . map (\c -> Piece c False (0, 0) False False) . join $ rect
-  maze <- pure (MMaze board width height size zeros)
+  maze <- pure (MMaze board width height size zeros level)
   maze <$ mazeMap maze (\c p -> p { partId = c })
   where
     rect = filter (not . null) . map (map toPix) . lines $ input
     (width, height) = (length (head rect), (length rect))
     size = width * height
     zeros = floor (logBase 10 (fromIntegral size) + 1.5)
+    level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)])
 
 mazeStore :: MMaze -> String -> IO ()
 mazeStore m label = writeFile label =<< renderStr m
@@ -250,9 +252,8 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
         when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
 
 renderImage' :: String -> Progress -> IO Progress
-renderImage' name p@Progress{maze=maze@MMaze{width, sizeLen}, iter, continues} =
+renderImage' name p@Progress{maze=maze@MMaze{sizeLen, level}, iter, continues} =
   p <$ renderImage (printf ("images/lvl%i-%s-%0*i.png") level name sizeLen iter) maze continues
-  where level :: Int = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)])
 
 renderWithPositions :: Maybe Continue -> Progress -> IO String
 renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} =
