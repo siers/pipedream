@@ -40,7 +40,7 @@ import Data.Foldable (fold, traverse_, for_, foldrM)
 import Data.Function (on)
 import Data.List (elemIndex, foldl')
 import Data.List.Extra (nubOrd)
-import Data.Map (Map, (!))
+import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust)
 import Data.Monoid (Sum(..))
 import Data.Set (Set)
@@ -52,7 +52,7 @@ import Graphics.Image.Interface (thaw, MImage, freeze, write)
 import Graphics.Image (writeImage, makeImageR, Pixel(..), toPixelRGB, VU(..), RGB)
 import qualified Control.Monad.Trans.State.Strict as State
 import qualified Data.Bits as Bit
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
