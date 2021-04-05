@@ -120,7 +120,7 @@ data Continue = Continue
 
 type Score = (Int, Int) -- score, created
 
-type Priority = Map Score Continue
+type Priority = Map Int Cursor
 type Continues = Map Cursor Continue
 data Components = Components (Map PartId Int) | Components' (Map PartId (Set Cursor)) deriving (Show, Generic)
 
@@ -465,22 +465,20 @@ prioritizeContinues progress@Progress{priority, continues, components} next =
   (\((priority, components), continues) -> progress { priority, components, continues }) $
     foldl' foldContinue ((priority, components), continues) $ map rescore next
   where
-    rescore c@Continue{cursor=(x, y), choices, island} =
-      c { score = x + y + choices * 2^15 - island * 2^17 }
+    rescore c@Continue{cursor=(x, y), choices, island, created} =
+      c { score = (x + y + choices * 2^15 - island * 2^17) * 2^32 + created }
 
     foldContinue (acc, continues) c@Continue{cursor} = Map.alterF (insertContinue acc c) cursor continues
 
-    cinsert c = Map.insert (cscore c) c :: Priority -> Priority
-    cscore Continue{score, created} = (score, created)
     insertContinue :: (Priority, Components) -> Continue -> Maybe Continue -> ((Priority, Components), Maybe Continue)
-    insertContinue (p, c) new Nothing =
-      ((cinsert new p, compInsert new c), Just new)
-    insertContinue (p, c) new (Just (exists@Continue{created})) =
+    insertContinue (p, c) new@Continue{cursor} Nothing =
+      ((Map.insert (score new) cursor p, compInsert new c), Just new)
+    insertContinue (p, c) new (Just (exists@Continue{cursor, created})) =
       ((contModify p, c), Just putback)
       where
         (putback, contModify) =
-          if cscore new < cscore exists
-          then (new { created }, cinsert putback . Map.delete (cscore exists))
+          if score new < score exists
+          then (new { created }, Map.insert (score new) cursor . Map.delete (score exists))
           else (exists, id)
 
 pieceDead :: MMaze -> Components -> (Continue, Priority) -> IO Bool
@@ -492,8 +490,10 @@ pieceDead maze components (Continue{cursor=cur, char=this}, _) = do
 -- assumptions: no solved or duplicate continues (per cursor) in priority
 findContinue :: Progress -> IO (Progress, Continue)
 findContinue p@Progress{priority, continues} = do
-  pure . (, continue) $ p { priority = priority' , continues = Map.delete cursor continues }
-  where ((_, continue@Continue{cursor}), priority') = Map.deleteFindMin priority
+  pure (p { priority = priority', continues = continues' }, continue)
+  where
+    ((_, cursor), priority') = Map.deleteFindMin priority
+    (continue, continues') = Map.alterF ((, Nothing) . fromJust) cursor continues
 
 -- flood fill with the generic function fillNext as "paint"
 -- assumptions: current piece is considered valid by fillNext
@@ -511,7 +511,7 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
 islandize :: Progress -> IO Progress
 islandize p@Progress{maze, continues} = do
   (_, _) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
-  let p' = maybe p (prioritizeContinues p . return) ((\c -> c { island = 1 }) . snd <$> Map.lookupMin (priority p))
+  let p' = maybe p (prioritizeContinues p . return) ((\c -> (continues Map.! c) { island = 1 }) . snd <$> Map.lookupMin (priority p))
   pure p'
   where
     borderContinues :: Continues -> Set Cursor -> Bool -> [Continue]
@@ -588,7 +588,7 @@ solve :: MMaze -> IO MMaze
 solve m = do
   let init = Continue (0, 0) 0 (0, 0) 0 0 0 0 0
   let components = Components (Map.fromList [((0, 0), 1)])
-  let p = Progress 0 0 (Map.singleton (0, 0) init) Map.empty components [] [] m
+  let p = Progress 0 0 (Map.singleton 0 (0, 0)) (Map.singleton (0, 0) init) components [] [] m
   p <- solve' (-1) False =<< reconnectComponents =<< islandize =<< solve' (-1) True p
   -- p <- foldrM id p . replicate 30 $ (solve' 100 False =<<) . renderImage' "di0405"
   let solved@Progress{iter, depth, maze} = p
