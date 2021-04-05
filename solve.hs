@@ -431,7 +431,7 @@ compConnected _ _ = []
 cursorToContinue :: MMaze -> Int -> Continue -> (PieceDelta, Int) -> IO Continue
 cursorToContinue maze iter Continue{char, origin, island, area} ((_, c, !direction), index) = do
   let origin' = if char `Bit.testBit` direction then origin else c
-  let island' = min 4 (island * 2)
+  let island' = min 2 (island * 2)
   Continue c 0 origin' 0 (iter * 4 + index) island' area <$> pieceRotationCount maze c
 
 prioritizeDeltas :: Progress -> Continue -> IO Progress
@@ -442,21 +442,22 @@ prioritizeDeltas progress@Progress{iter, maze} continue@Continue{cursor=cur} = d
 prioritizeIslands :: [Cursor] -> Progress -> IO Progress
 prioritizeIslands _ p@Progress{components = (Components _)} = pure p
 prioritizeIslands directDeltas p@Progress{maze, components = (Components' _)} = do
-  foldr prioritizeIsland p <$> filterM (fmap solvedSea . mazeRead maze) directDeltas
+  shores <- filterM (fmap solvedSea . mazeRead maze) directDeltas
+  foldr prioritizeIsland p <$> traverse (partEquate maze) shores
   where
     solvedSea Piece{solved, wasIsland} = solved && not wasIsland
 
     prioritizeIsland :: PartId -> Progress -> Progress
     prioritizeIsland k p@Progress{continues} =
-      prioritizeContinues p . map (\c -> (continues Map.! c) { island = 1 }) $ (compConnected k (components p))
+      prioritizeContinues p . map (\c -> (continues Map.! c) { island = 1 }) $ compConnected k (components p)
 
 prioritizeContinues :: Progress -> [Continue] -> Progress
 prioritizeContinues progress@Progress{priority, continues, components} next =
   (\((priority, components), continues) -> progress { priority, components, continues }) $
     foldl' foldContinue ((priority, components), continues) $ map rescore next
   where
-    rescore c@Continue{cursor=(x, y), choices, island, area} =
-      c { score = x + y + choices * 2^15 - (island * 2^10 * area) * 2^17 }
+    rescore c@Continue{cursor=(x, y), choices, island} =
+      c { score = x + y + choices * 2^15 - island * 2^17 }
 
     foldContinue (acc, continues) c@Continue{cursor} = Map.alterF (insertContinue acc c) cursor continues
 
@@ -500,8 +501,9 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
 
 islandize :: Progress -> IO Progress
 islandize p@Progress{maze, continues} = do
-  (p, _) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
-  pure $ maybe p (prioritizeContinues p . return) ((\c -> c { island = 2 }) . snd <$> Map.lookupMin (priority p))
+  (_, _) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
+  let p' = maybe p (prioritizeContinues p . return) ((\c -> c { island = 1 }) . snd <$> Map.lookupMin (priority p))
+  pure p'
   where
     borderContinues :: Continues -> Set Cursor -> Bool -> [Continue]
     borderContinues continues borders active =
@@ -578,13 +580,12 @@ solve m = do
   let init = Continue (0, 0) 0 (0, 0) 0 0 0 0 0
   let components = Components (Map.fromList [((0, 0), 1)])
   let p = Progress 0 0 (Map.singleton (0, 0) init) Map.empty components [] [] m
-  p <- reconnectComponents =<< islandize =<< image "debug-04-03-islands" =<< solve' (-1) True p
-  p <- foldrM id p . replicate 20 $ (renderImage' "debug-04-03-islands" =<<) . solve' 10000 False
+  p <- solve' (-1) False =<< reconnectComponents =<< islandize =<< solve' (-1) True p
+  -- p <- foldrM id p . replicate 5 $ (solve' 100000 False =<<) . renderImage' "debug-04-03-islands"
   let solved@Progress{iter, depth, maze} = p
 
   putStrLn (printf "%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   maze <$ renderImage' "done" solved
-  where image label = renderImage' ("debug-" ++ label)
 
 {--- Main ---}
 
