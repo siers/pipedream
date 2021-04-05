@@ -35,12 +35,12 @@ import Control.Monad.Trans.State.Strict (StateT(..))
 import Data.Bifunctor (bimap)
 import Data.Foldable (fold, traverse_, for_, foldrM)
 import Data.Function (on)
-import Data.List (elemIndex, foldl', nub)
+import Data.List (elemIndex, foldl')
+import Data.List.Extra (nubOrd)
 import Data.Map (Map, (!))
 import Data.Maybe (fromMaybe, fromJust)
 import Data.Monoid (Sum(..))
 import Data.Set (Set)
-import Data.Tuple.Extra (dupe)
 import Data.Tuple (swap)
 import Data.Vector.Mutable (MVector)
 import Data.Word (Word8)
@@ -524,21 +524,18 @@ solveContinue
     unwindThis <- mazeSolve maze continue
     thisPart <- partEquate maze origin_
     let directDeltas = map (cursorDelta cursor) $ pixDirections char
-    (origin, neighbours) <- fmap (bimap minimum id . dupe . nub . (thisPart :)) . traverse (partEquate maze) $ directDeltas
-    let components = compEquate origin (filter (/= origin) (nub neighbours)) (compRemove thisPart cursor components_)
+    neighbours <- fmap (nubOrd . (thisPart :)) . traverse (partEquate maze) $ directDeltas
+    let origin = minimum neighbours
+    let components = compEquate origin (filter (/= origin) (neighbours)) (compRemove thisPart cursor components_)
     unwindEquate <- mazeEquate maze origin neighbours
     --
     progress' <- prioritizeIslands directDeltas =<< prioritizeDeltas progress { components } continue { origin }
 
     traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
 
-progressPop :: Progress -> IO Progress
-progressPop p@Progress{maze, unwinds=(unwind:unwinds)} = do
-  p { unwinds } <$ mazePop maze unwind
-
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Int -> Bool -> Progress -> IO Progress
--- solve' Progress{priority=[]} = error "unlikely"
+-- solve' _ _ p@Progress{priority} | Map.null priority = pure p
 solve' lifespan first progressInit@Progress{iter, depth, maze} = do
   (progress@Progress{components}, continue) <- findContinue progressInit
 
@@ -554,8 +551,9 @@ solve' lifespan first progressInit@Progress{iter, depth, maze} = do
     removeDead components = if last then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
 
     backtrack :: Progress -> IO (Progress, Continue)
-    backtrack Progress{space=[]} = error "unlikely" -- for solvable mazes
-    backtrack p@Progress{space=([]:space)} = progressPop p { space } >>= backtrack
+    backtrack Progress{space=[]} = error "unsolvable"
+    backtrack Progress{space=([]:_), unwinds=[]} = error "unlikely"
+    backtrack p@Progress{space=([]:space), unwinds=(unwind:unwinds)} = mazePop maze unwind >> backtrack p { space, unwinds }
     backtrack p@Progress{space=(((continue, Progress{depth, priority, continues, components}):guesses):space)} =
       pure (p { depth, priority, continues, components, space = guesses : space }, continue)
 
