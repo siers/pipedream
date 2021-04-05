@@ -175,6 +175,7 @@ parse input = do
 mazeStore :: MMaze -> String -> IO ()
 mazeStore m label = writeFile label =<< renderStr m
 
+{-# INLINE mazeBounded #-}
 mazeBounded :: MMaze -> Cursor -> Bool
 mazeBounded MMaze{width, height} (!x, !y) = x >= 0 && y >= 0 && width > x && height > y
 
@@ -188,17 +189,20 @@ mazeCursor width = swap . flip quotRem width
 mazeRead :: MMaze -> Cursor -> IO Piece
 mazeRead MMaze{board, width} (x, y) = MV.unsafeRead board (x + y * width)
 
+{-# INLINE mazeModify #-}
 mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO ()
 mazeModify MMaze{board, width} f (x, y) = MV.unsafeModify board f (x + y * width)
 
 mazeClone :: MMaze -> IO MMaze
 mazeClone m@MMaze{board} = (\board -> m { board }) <$> MV.clone board
 
+{-# INLINE mazeSolve #-}
 mazeSolve :: MMaze -> Continue -> IO Unwind1
 mazeSolve m Continue{char, cursor, island} =
   (cursor, ) <$> mazeRead m cursor <* mazeModify m modify cursor
   where modify p = p { pipe = char, solved = True, wasIsland = if island > 0 then True else False }
 
+{-# INLINE mazeEquate #-}
 mazeEquate :: MMaze -> PartId -> [Cursor] -> IO Unwind
 mazeEquate m partId cursors =
   traverse (\c -> (c, ) <$> mazeRead m c) cursors
@@ -208,6 +212,7 @@ mazePop :: MMaze -> Unwind -> IO ()
 mazePop m = traverse_ (uncurry (flip (mazeModify m . const)))
 
 -- lookup fixed point (ish) in maze by PartId lookup, stops at first cycle
+{-# INLINE partEquate #-}
 partEquate :: MMaze -> PartId -> IO PartId
 partEquate maze v = loop' =<< find v
   where
@@ -329,12 +334,14 @@ charMap = Map.fromList charMapEntries
 pixMap :: Map Pix Char
 pixMap = Map.fromList $ map swap charMapEntries
 
+{-# INLINE pixRotations #-}
 pixRotations :: Pix -> [Rotation]
 pixRotations 0b11111111 = [0]
 pixRotations 0b10101010 = [0,1]
 pixRotations 0b01010101 = [0,1]
 pixRotations _ = rotations
 
+{-# INLINE pixDirections #-}
 pixDirections :: Pix -> [Direction]
 pixDirections n = fold
   [ if n `Bit.testBit` 0 then [0] else []
@@ -346,9 +353,11 @@ pixDirections n = fold
 toPix = (charMap !) :: Char -> Pix
 toChar = (pixMap !) :: Pix -> Char
 
+{-# INLINE rotate #-}
 rotate :: Rotation -> Pix -> Pix
 rotate = flip Bit.rotateL
 
+{-# INLINE cursorDelta #-}
 cursorDelta :: Cursor -> Direction -> Cursor
 cursorDelta (x, y) 0 = (x, y - 1)
 cursorDelta (x, y) 1 = (x + 1, y)
@@ -370,6 +379,7 @@ mazeDeltaWall m !c !dir =
 {--- Solver bits: per-pixel stuff ---}
 
 -- given current pixel at rotation, does it match the pixel at direction from it?
+{-# INLINE pixValid #-}
 pixValid :: (Pix, Pix, Rotation, Direction) -> Bool
 pixValid (!this, !that, !rotation, !direction) =
   not $ (rotate rotation this `Bit.xor` rotate 2 that) `Bit.testBit` direction
@@ -379,6 +389,7 @@ validateDirection :: Pix -> Rotation -> (Piece, Direction) -> Bool
 validateDirection this rotation (Piece{pipe=that, solved}, direction) = do
   not solved || pixValid (this, that, rotation, direction)
 
+{-# INLINE validateRotation #-}
 validateRotation :: Pix -> [(Piece, Direction)] -> Rotation -> Bool
 validateRotation this deltas rotation = all (validateDirection this rotation) deltas
 
@@ -387,11 +398,13 @@ validateRotationM :: MMaze -> Cursor -> Pix -> Rotation -> IO Bool
 validateRotationM maze cursor this rotation =
   (fmap (validateDirection this rotation) . mazeDeltaWall maze cursor) `allM` directions
 
+{-# INLINE pieceRotations #-}
 pieceRotations :: MMaze -> Cursor -> IO [Pix]
 pieceRotations maze cur = do
   Piece{pipe=this} <- mazeRead maze cur
   fmap (map (flip rotate this)) . filterM (validateRotationM maze cur this) $ pixRotations this
 
+{-# INLINE pieceRotationCount #-}
 pieceRotationCount :: MMaze -> Cursor -> IO Int
 pieceRotationCount maze cur = do
   Piece{pipe=this} <- mazeRead maze cur
@@ -399,30 +412,38 @@ pieceRotationCount maze cur = do
 
 {--- Solver bits: components ---}
 
+{-# INLINE compInsert #-}
 compInsert :: Continue -> Components -> Components
 compInsert Continue{origin} (Components c) = Components (Map.insertWith (+) origin 1 c)
 compInsert Continue{origin, cursor} (Components' c) = Components' (Map.insertWith (Set.union) origin (Set.singleton cursor) c)
 
+{-# INLINE compRemove #-}
 compRemove :: PartId -> Cursor -> Components -> Components
 compRemove origin _cursor (Components c) = Components (Map.update (Just . (subtract 1)) origin c)
 compRemove origin cursor (Components' c) = Components' (Map.update (Just . Set.delete cursor) origin c)
 
+{-# INLINE compEquate #-}
 compEquate :: PartId -> [PartId] -> Components -> Components
 compEquate hub connections c = equate c
   where
+    {-# INLINE equate #-}
     equate (Components c) = Components $ equate' Sum getSum c
     equate (Components' c) = Components' $ equate' id id c
 
+    {-# INLINE equate' #-}
     equate' :: Monoid m => (a -> m) -> (m -> a) -> Map PartId a -> Map PartId a
     equate' lift drop c = Map.insertWith (\a b -> drop (lift a <> lift b)) hub (drop sum) removed
       where (sum, removed) = (foldl' (extract lift) (mempty, c) connections)
 
+    {-# INLINE extract #-}
     extract lift (sum, m) part = Map.alterF ((, Nothing) . mappend sum . foldMap lift) part m
 
+{-# INLINE compAlive #-}
 compAlive :: PartId -> Components -> Bool
 compAlive k (Components c) = (Just 1 ==) $ Map.lookup k c
 compAlive k (Components' c) = (Just 1 ==) . fmap Set.size $ Map.lookup k c
 
+{-# INLINE compConnected #-}
 compConnected :: PartId -> Components -> [Cursor]
 compConnected k (Components' c) = foldMap Set.toList (Map.lookup k c)
 compConnected _ _ = []
@@ -483,6 +504,7 @@ prioritizeContinues progress@Progress{priority, continues, components} continue 
           then (new { created }, IntMap.insert (score new) cursor . IntMap.delete (score exists))
           else (exists, id)
 
+{-# INLINE pieceDead #-}
 pieceDead :: MMaze -> Components -> (Continue, Priority) -> IO Bool
 pieceDead maze components (Continue{cursor=cur, char=this}, _) = do
   thisPart <- partEquate maze . partId =<< mazeRead maze cur
@@ -490,6 +512,7 @@ pieceDead maze components (Continue{cursor=cur, char=this}, _) = do
   where stuck = allM (fmap solved . mazeRead maze . cursorDelta cur) (pixDirections this)
 
 -- assumptions: no solved or duplicate continues (per cursor) in priority
+{-# INLINE findContinue #-}
 findContinue :: Progress -> IO (Progress, Continue)
 findContinue p@Progress{priority, continues} = do
   pure (p { priority = priority', continues = continues' }, continue)
@@ -546,6 +569,7 @@ reconnectComponents p@Progress{maze, continues} = do
 
 -- Solves a valid piece, mutates the maze and sets unwind
 -- inefficient access: partEquate reads the same data as islands reads
+-- all methods within this method are inlined
 solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
   progress@Progress{maze, components = components_}
@@ -557,9 +581,8 @@ solveContinue
     let origin = minimum neighbours
     let components = compEquate origin (filter (/= origin) (neighbours)) (compRemove thisPart cursor components_)
     unwindEquate <- mazeEquate maze origin neighbours
-    --
-    progress' <- prioritizeIslands directDeltas =<< prioritizeDeltas progress { components } continue { origin }
 
+    progress' <- prioritizeIslands directDeltas =<< prioritizeDeltas progress { components } continue { origin }
     traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
 
 -- Solves pieces by backtracking, stops when maze is solved.
