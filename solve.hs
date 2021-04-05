@@ -6,6 +6,9 @@
 {-# OPTIONS_GHC -Wall -Wno-name-shadowing -Wno-unused-do-bind -Wno-type-defaults -Wno-missing-signatures #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-} -- complains about lens :/
 
+-- json
+{-# LANGUAGE DeriveGeneric #-}
+
 #ifndef TRACE
 #define TRACE 1
 #endif
@@ -56,6 +59,12 @@ import qualified Data.Vector.Mutable as MV
 import System.Environment (lookupEnv, getArgs)
 import Text.Printf (printf)
 
+-- json for debug outputs
+import Data.Aeson (ToJSON(..))
+-- import qualified Data.Aeson as Aeson
+-- import qualified Data.ByteString.Lazy.Char8 as LBS
+import GHC.Generics (Generic)
+
 -- IO
 
 import Data.Text (Text)
@@ -84,7 +93,7 @@ data Piece = Piece
   , partId :: PartId -- meaningless if not connected
   , connected :: Bool -- connected when pointed
   , wasIsland :: Bool -- was this solved by an island Continue?
-  } deriving Show
+  } deriving (Generic, Show)
 
 type PieceDelta = (Piece, Cursor, Direction)
 
@@ -105,7 +114,7 @@ data Continue = Continue
   , island :: Int -- 0 if not an island or not active, otherwise 1
   , area :: Int -- island area, 0 if not an island
   , choices :: Int -- number of valid rotations
-  } deriving Show
+  } deriving (Generic, Show)
 
 type Score = (Int, Int) -- score, created
 
@@ -139,6 +148,9 @@ instance Show Progress where
 
 instance Show MMaze where
   show _ = "MMaze"
+
+instance ToJSON Piece
+instance ToJSON Continue
 
 {--- MMaze and Matrix operations ---}
 

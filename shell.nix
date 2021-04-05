@@ -2,7 +2,9 @@ with (import <nixpkgs> {});
 
 let
   ghc = haskell.packages.ghc884.ghcWithPackages (packages: with packages; [
+    aeson
     base
+    bytestring
     containers
     extra
     hip
