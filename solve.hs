@@ -41,7 +41,7 @@ import Data.Function (on)
 import Data.List (elemIndex, foldl')
 import Data.List.Extra (nubOrd)
 import Data.Map (Map, (!))
-import Data.Maybe (fromMaybe, fromJust)
+import Data.Maybe (fromMaybe, fromJust, isJust)
 import Data.Monoid (Sum(..))
 import Data.Set (Set)
 import Data.Tuple (swap)
@@ -122,7 +122,7 @@ type Score = (Int, Int) -- score, created
 
 type Priority = Map Score Continue
 type Continues = Map Cursor Continue
-data Components = Components (Map PartId Int) | Components' (Map PartId (Set Cursor))
+data Components = Components (Map PartId Int) | Components' (Map PartId (Set Cursor)) deriving (Show, Generic)
 
 type Unwind1 = (Cursor, Piece)
 type Unwind = [Unwind1]
@@ -153,6 +153,7 @@ instance Show MMaze where
 
 instance ToJSON Piece
 instance ToJSON Continue
+instance ToJSON Components
 
 {--- MMaze and Matrix operations ---}
 
@@ -229,17 +230,19 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
     colorHash :: Cursor -> Double
     colorHash (x, y) =
       let
-        n = ((7 * fromIntegral x) / (11 * fromIntegral (y + 1))) + 0.5
+        n = ((83 * fromIntegral x) / (37 * fromIntegral (y + 2))) + 0.5
         unfloor m = m - fromIntegral (floor m)
       in unfloor $ (unfloor n) / 4 - 0.15
 
     drawPiece :: MImage RealWorld VU RGB Double -> PartId -> IO ()
     drawPiece image cur@(x, y) = do
-      Piece{pipe, partId, solved, wasIsland} <- mazeRead maze cur
-      fill <- (\c -> toPixelRGB $ PixelHSI c (if solved then 0.9 else 0) (if wasIsland then 1 else 0.3)) .
-        colorHash <$> partEquate maze partId
-      -- fill <- pure $ (\carea -> toPixelRGB $ PixelHSI (0 :: Double) 0 ((carea + 200) / 280))
-      --   (fromMaybe 0 (fromIntegral . area <$> Map.lookup cur continues))
+      Piece{pipe, partId, solved} <- mazeRead maze cur
+      ch <- colorHash <$> partEquate maze partId
+      let cont = Map.lookup cur continues
+      let colo = maybe ch (\c -> if island c == 2 then 0 else (if island c == 1 then 0.5 else 0.7)) cont
+      let satu = if solved then 0.3 else (if isJust cont then 1 else 0)
+      let inte = if isJust cont then 1 else 0.5
+      let fill = toPixelRGB $ PixelHSI colo satu inte
       write image (x * pw + 1, y * ph + 1) fill
       for_ (pixDirections pipe) $ \d ->
         when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
@@ -587,7 +590,7 @@ solve m = do
   let components = Components (Map.fromList [((0, 0), 1)])
   let p = Progress 0 0 (Map.singleton (0, 0) init) Map.empty components [] [] m
   p <- solve' (-1) False =<< reconnectComponents =<< islandize =<< solve' (-1) True p
-  -- p <- foldrM id p . replicate 5 $ (solve' 100000 False =<<) . renderImage' "debug-04-03-islands"
+  -- p <- foldrM id p . replicate 30 $ (solve' 100 False =<<) . renderImage' "di0405"
   let solved@Progress{iter, depth, maze} = p
 
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))

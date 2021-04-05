@@ -175,10 +175,16 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
 • bring back Continue{created}, because we don't need guessable scores if we have `continues'
 
 2021-03-13-13:35:17
-• solve whole islands (Continue.islandWeight) on 6 and continue with continuations of islands
-• fillNextSolved with mutable sets
-• make components available as Map PartId (Set Cursor)
-• simple optimizations for later: Data.IntMap.Strict (cursors as Int), unboxed/storable vectors, cache deltas, cache matrixBounded
+✔ solve whole islands (Continue.islandWeight) on 6 and continue with continuations of islands
+✗ fillNextSolved with mutable sets (no such thing)
+✔ make components available as Map PartId (Set Cursor)
+• simple optimizations for later:
+  • Data.IntMap.Strict (cursors as Int)
+  • unboxed/storable vectors
+  • cache deltas
+  • cache matrixBounded
+  • cache next (= directions with some bits unset, .&. when reprioritizing)
+    • update in continues, make priority :: Map PartId Cursor
 
 visual upgrades:
 • 3x3 border for image for easier edge viewing

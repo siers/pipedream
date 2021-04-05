@@ -15,11 +15,17 @@ partEquate m (2,2)
 
 -- 2021-02-22-20:19:16
 
+import qualified Data.Aeson as Aeson
+import qualified Data.ByteString.Lazy.Char8 as LBS
 :l solve
-a <- parse =<< readFile "samples/5-1"
-p <- pure $ Progress 0 0 (Map.singleton (0, 0) (Continue (0, 0) 0 (0, 0) 0 0 0 0 0)) Map.empty (Map.fromList [((0, 0), 1)]) [] [] a
-q <- islandize =<< solve' (-1) p
-renderImage' "debug" (fst q)
+m <- parse =<< readFile "samples/5-1"
+init <- pure $ Continue (0, 0) 0 (0, 0) 0 0 0 0 0
+comp <- pure $ Components (Map.fromList [((0, 0), 1)])
+p <- pure $ Progress 0 0 (Map.singleton (0, 0) init) Map.empty comp [] [] m
+q <- reconnectComponents =<< islandize =<< solve' (-1) True p
+writeFile "out" . LBS.unpack . Aeson.encode . toJSON . (\(Components' c) -> Map.mapKeys show c) . components $ q
+
+renderImage' "ghci" q
 nub . map (area . snd) . Map.toList . continues . fst $ q
 
 import qualified Data.List as L
