@@ -41,6 +41,7 @@ import Data.Function (on)
 import Data.List (elemIndex, foldl')
 import Data.List.Extra (nubOrd)
 import Data.Map.Strict (Map, (!))
+import Data.IntMap.Strict (IntMap)
 import Data.Maybe (fromMaybe, fromJust, isJust)
 import Data.Monoid (Sum(..))
 import Data.Set (Set)
@@ -53,6 +54,7 @@ import Graphics.Image (writeImage, makeImageR, Pixel(..), toPixelRGB, VU(..), RG
 import qualified Control.Monad.Trans.State.Strict as State
 import qualified Data.Bits as Bit
 import qualified Data.Map.Strict as Map
+import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
@@ -120,7 +122,7 @@ data Continue = Continue
 
 type Score = (Int, Int) -- score, created
 
-type Priority = Map Int Cursor
+type Priority = IntMap Cursor
 type Continues = Map Cursor Continue
 data Components = Components (Map PartId Int) | Components' (Map PartId (Set Cursor)) deriving (Show, Generic)
 
@@ -264,7 +266,7 @@ renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} =
         _ -> (toChar pipe) : []
 
 render :: MMaze -> IO ()
-render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 Map.empty Map.empty (Components Map.empty) [] []
+render = (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 IntMap.empty Map.empty (Components Map.empty) [] []
 
 renderStr :: MMaze -> IO String
 renderStr MMaze{board, width, height} = do
@@ -472,13 +474,13 @@ prioritizeContinues progress@Progress{priority, continues, components} next =
 
     insertContinue :: (Priority, Components) -> Continue -> Maybe Continue -> ((Priority, Components), Maybe Continue)
     insertContinue (p, c) new@Continue{cursor} Nothing =
-      ((Map.insert (score new) cursor p, compInsert new c), Just new)
+      ((IntMap.insert (score new) cursor p, compInsert new c), Just new)
     insertContinue (p, c) new (Just (exists@Continue{cursor, created})) =
       ((contModify p, c), Just putback)
       where
         (putback, contModify) =
           if score new < score exists
-          then (new { created }, Map.insert (score new) cursor . Map.delete (score exists))
+          then (new { created }, IntMap.insert (score new) cursor . IntMap.delete (score exists))
           else (exists, id)
 
 pieceDead :: MMaze -> Components -> (Continue, Priority) -> IO Bool
@@ -492,7 +494,7 @@ findContinue :: Progress -> IO (Progress, Continue)
 findContinue p@Progress{priority, continues} = do
   pure (p { priority = priority', continues = continues' }, continue)
   where
-    ((_, cursor), priority') = Map.deleteFindMin priority
+    ((_, cursor), priority') = IntMap.deleteFindMin priority
     (continue, continues') = Map.alterF ((, Nothing) . fromJust) cursor continues
 
 -- flood fill with the generic function fillNext as "paint"
@@ -511,7 +513,7 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
 islandize :: Progress -> IO Progress
 islandize p@Progress{maze, continues} = do
   (_, _) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
-  let p' = maybe p (prioritizeContinues p . return) ((\c -> (continues Map.! c) { island = 1 }) . snd <$> Map.lookupMin (priority p))
+  let p' = maybe p (prioritizeContinues p . return) ((\c -> (continues Map.! c) { island = 1 }) . snd <$> IntMap.lookupMin (priority p))
   pure p'
   where
     borderContinues :: Continues -> Set Cursor -> Bool -> [Continue]
@@ -588,7 +590,7 @@ solve :: MMaze -> IO MMaze
 solve m = do
   let init = Continue (0, 0) 0 (0, 0) 0 0 0 0 0
   let components = Components (Map.fromList [((0, 0), 1)])
-  let p = Progress 0 0 (Map.singleton 0 (0, 0)) (Map.singleton (0, 0) init) components [] [] m
+  let p = Progress 0 0 (IntMap.singleton 0 (0, 0)) (Map.singleton (0, 0) init) components [] [] m
   p <- solve' (-1) False =<< reconnectComponents =<< islandize =<< solve' (-1) True p
   -- p <- foldrM id p . replicate 30 $ (solve' 100 False =<<) . renderImage' "di0405"
   let solved@Progress{iter, depth, maze} = p
