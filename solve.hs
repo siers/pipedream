@@ -29,8 +29,8 @@ import Control.Lens.Internal.FieldTH (makeFieldOptics, LensRules(..))
 import Language.Haskell.TH.Syntax (mkName, nameBase)
 import Control.Lens.TH (DefName(..), lensRules)
 
-import Control.Lens ((&), (%~), set, view, _1, _2)
-import Control.Monad.Extra (allM, whenM)
+import Control.Lens ((&), (%~), set, _2)
+import Control.Monad.Extra (allM, whenM, ifM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad (join, filterM, void, when, mfilter)
 import Control.Monad.Primitive (RealWorld)
@@ -95,10 +95,8 @@ data Piece = Piece
   , partId :: PartId -- meaningless if not connected
   , connected :: Bool -- connected when pointed
   , wasIsland :: Bool -- was this solved by an island Continue?
-  , edge :: Bool -- deltas are bounded, if this isn't an edge piece
+  , inland :: Bool -- deltas are bounded, if this is an inland piece (not on the edge)
   } deriving (Generic, Show)
-
-type PieceDelta = (Piece, Cursor, Direction)
 
 data MMaze = MMaze -- Mutable Maze
   { board :: MVector RealWorld Piece
@@ -164,10 +162,9 @@ instance ToJSON Components
 parse :: String -> IO MMaze
 parse input = do
   board <- V.thaw . V.fromList . map toPiece . zip [0..] . join $ rect
-  maze <- pure (MMaze board width height size zeros level)
-  maze <$ mazeMap maze (\c p -> p { partId = c })
+  pure (MMaze board width height size zeros level)
   where
-    toPiece (i, c) = Piece c False (0, 0) False False (isEdge (mazeCursor width i))
+    toPiece (i, c) = Piece c False (mazeCursor width i) False False (not (isEdge (mazeCursor width i)))
     isEdge (x, y) = ((x + 1) `mod` width) < 2 || ((y + 1) `mod` height) < 2
     rect :: [[Pix]] = filter (not . null) . map (map toPix) . lines $ input
     (width, height) = (length (head rect), (length rect))
@@ -193,11 +190,6 @@ mazeRead MMaze{board, width} (x, y) = MV.unsafeRead board (x + y * width)
 
 mazeModify :: MMaze -> (Piece -> Piece) -> Cursor -> IO ()
 mazeModify MMaze{board, width} f (x, y) = MV.unsafeModify board f (x + y * width)
-
-mazeMap :: MMaze -> (Cursor -> Piece -> Piece) -> IO ()
-mazeMap m@MMaze{width, height} f =
-  void . traverse (\cursor -> mazeModify m (f cursor) cursor) . join $
-    [ [ (x, y) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
 mazeClone :: MMaze -> IO MMaze
 mazeClone m@MMaze{board} = (\board -> m { board }) <$> MV.clone board
@@ -364,12 +356,6 @@ cursorDelta (x, y) 2 = (x, y + 1)
 cursorDelta (x, y) 3 = (x - 1, y)
 cursorDelta _ _      = error "only defined for 4 directions"
 
-mazeDeltas :: MMaze -> Cursor -> [Direction] -> IO [PieceDelta]
-mazeDeltas m c directions =
-  traverse (_1 (mazeRead m))
-  . filter (mazeBounded m . (view _1))
-  $ (\d -> (cursorDelta c d, cursorDelta c d, d)) `map` directions
-
 mazeDeltasWalls :: MMaze -> Cursor -> IO [(Piece, Direction)]
 mazeDeltasWalls m c = traverse (mazeDeltaWall m c) directions
 
@@ -443,17 +429,22 @@ compConnected _ _ = []
 
 {--- Solver bits: continues ---}
 
-cursorToContinue :: MMaze -> Int -> Continue -> (PieceDelta, Int) -> IO Continue
-cursorToContinue maze iter Continue{char, origin, island, area} ((_, c, !direction), index) = do
+{-# INLINE cursorToContinue #-}
+cursorToContinue :: MMaze -> Int -> Continue -> (Cursor, Direction, Int) -> IO Continue
+cursorToContinue maze iter Continue{char, origin, island, area} (c, !direction, index) = do
   let origin' = if char `Bit.testBit` direction then origin else c
   let island' = min 2 (island * 2)
   Continue c 0 origin' 0 (iter * 4 + index) island' area <$> pieceRotationCount maze c
 
+{-# INLINE prioritizeDeltas #-}
 prioritizeDeltas :: Progress -> Continue -> IO Progress
-prioritizeDeltas progress@Progress{iter, maze} continue@Continue{cursor=cur} = do
-  deltas <- filter (not . solved . view _1) <$> mazeDeltas maze cur directions
-  prioritizeContinues progress <$> traverse (cursorToContinue maze iter continue) (zip deltas [0..])
+prioritizeDeltas p@Progress{iter, maze} continue@Continue{cursor=cur} = do
+  (\f -> foldrM f p (zip [0..] directions)) $ \(i, d) p' ->
+    ifM (((mazeBounded maze (cursorDelta cur d)) &&) <$> (not . solved <$> mazeRead maze (cursorDelta cur d)))
+    (prioritizeContinues p' <$> cursorToContinue maze iter continue (cursorDelta cur d, d, i))
+    (pure p')
 
+{-# INLINE prioritizeIslands #-}
 prioritizeIslands :: [Cursor] -> Progress -> IO Progress
 prioritizeIslands _ p@Progress{components = (Components _)} = pure p
 prioritizeIslands directDeltas p@Progress{maze, components = (Components' _)} = do
@@ -463,19 +454,24 @@ prioritizeIslands directDeltas p@Progress{maze, components = (Components' _)} = 
     solvedSea Piece{solved, wasIsland} = solved && not wasIsland
 
     prioritizeIsland :: PartId -> Progress -> Progress
-    prioritizeIsland k p@Progress{continues} =
-      prioritizeContinues p . map (\c -> (continues Map.! c) { island = 1 }) $ compConnected k (components p)
+    prioritizeIsland k p =
+      (\f -> foldr f p (compConnected k (components p))) $
+        (\c p@Progress{continues} -> prioritizeContinues p (continues Map.! c) { island = 1 })
 
-prioritizeContinues :: Progress -> [Continue] -> Progress
-prioritizeContinues progress@Progress{priority, continues, components} next =
-  (\((priority, components), continues) -> progress { priority, components, continues }) $
-    foldl' foldContinue ((priority, components), continues) $ map rescore next
+{-# INLINE prioritizeContinues #-}
+prioritizeContinues :: Progress -> Continue -> Progress
+prioritizeContinues progress@Progress{priority, continues, components} continue =
+  (\((p, cp), cn) -> progress { priority = p, components = cp, continues = cn }) $
+    foldContinue ((priority, components), continues) $ rescore continue
   where
+    {-# INLINE rescore #-}
     rescore c@Continue{cursor=(x, y), choices, island, created} =
       c { score = (x + y + choices * 2^15 - island * 2^17) * 2^32 + created }
 
+    {-# INLINE foldContinue #-}
     foldContinue (acc, continues) c@Continue{cursor} = Map.alterF (insertContinue acc c) cursor continues
 
+    {-# INLINE insertContinue #-}
     insertContinue :: (Priority, Components) -> Continue -> Maybe Continue -> ((Priority, Components), Maybe Continue)
     insertContinue (p, c) new@Continue{cursor} Nothing =
       ((IntMap.insert (score new) cursor p, compInsert new c), Just new)
@@ -517,8 +513,8 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
 islandize :: Progress -> IO Progress
 islandize p@Progress{maze, continues} = do
   (_, _) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
-  let p' = maybe p (prioritizeContinues p . return) ((\c -> (continues Map.! c) { island = 1 }) . snd <$> IntMap.lookupMin (priority p))
-  pure p'
+  let firstIsland = (\c -> (continues Map.! c) { island = 1 }) . snd <$> IntMap.lookupMin (priority p)
+  pure (maybe p (prioritizeContinues p) firstIsland)
   where
     borderContinues :: Continues -> Set Cursor -> Bool -> [Continue]
     borderContinues continues borders active =
@@ -533,7 +529,7 @@ islandize p@Progress{maze, continues} = do
     perIsland cursor (visited, p@Progress{continues}, max@(maxSize, _)) = do
       (_all, borders :: Set Cursor) <- flood (fillNextSolved continues) maze cursor
       let max' = if Set.size borders > maxSize then (Set.size borders, borders) else max
-      pure (visited `Set.union` borders, prioritizeContinues p (borderContinues continues borders False), max')
+      pure (visited `Set.union` borders, foldr (flip prioritizeContinues) p (borderContinues continues borders False), max')
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
     fillNextSolved continues _ cur _ deltasWall = do
