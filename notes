@@ -178,19 +178,28 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
 ✔ solve whole islands (Continue.islandWeight) on 6 and continue with continuations of islands
 ✗ fillNextSolved with mutable sets (no such thing)
 ✔ make components available as Map PartId (Set Cursor)
+• simple fixes
+  ✔ fix recursion guard
+  ✔ lvl in MMaze
 • simple optimizations for later:
-  • Data.IntMap.Strict (cursors as Int)
-  • unboxed/storable vectors
-  • cache deltas
-  • cache matrixBounded
-  • cache next (= directions with some bits unset, .&. when reprioritizing)
+  ✔ priority :: Data.IntMap.Strict
+  ✔ prioritize all choices = 0 from the top
+  • add all init continues with choices = 0 (crosses and edge pieces)
+  • continues :: Data.IntMap.Strict Int Continue, problems: deltas must be precomputed (Wall, Cursor)^4) or just bit-packed directions
+  • cache next (bit-packed directions, .&. when reprioritizing)
     • update in continues, make priority :: Map PartId Cursor
-
-visual upgrades:
-• 3x3 border for image for easier edge viewing
-• pick colors from pallette
-• create animation with ffmpeg (use threads for actual drawing, but don't forget to wait for them to finish)
-• B&W with continues only
+  • continues: use choice count for space
+  • unboxed/storable vectors
+• visual upgrades:
+  • new tracing mode after islandize
+  • 3x3 border for image for easier edge viewing
+  • pick colors from pallette
+  • create animation with ffmpeg (use threads for actual drawing, but don't forget to wait for them to finish)
+  • create a hackage page
+  ✗ B&W with continues only (just higher intensity/saturation is fine :)
+• main algo updates:
+  • compute island triviality
+  • keep multiple progresses ordered by breadth count (split :: Int + 1), have more breadth
 
 2021-03-18-18:09:33
 data Continue = Continue { .. + islandWeight :: Int = 0, island :: Boolean = False }
@@ -352,3 +361,23 @@ data Components =
   ./solve trash/samples/5-{01..10}  19.28s user 0.56s system 99% cpu 19.838 total
   Components' (Map PartId (Set Cursor))
   ./solve trash/samples/5-{01..10}  19.62s user 0.58s system 99% cpu 20.200 total
+
+% c <<< "on $(gsha) at $(date +%F-%T) // $(gmsg)"
+
+on 6330a9a at 2021-04-05-14:23:10:
+% ghc -O solve.hs && time ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}
+./solve trash/samples/5-{01..20} trash/samples/3-{01..20}  36.78s user 1.06s system 99% cpu 37.851 total
+
+on 9029160 at 2021-04-05-14:42:22 // Priority :: Map Int Cursor
+% ghc -O solve.hs && time ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}
+./solve trash/samples/5-{01..20} trash/samples/3-{01..20}  36.34s user 1.02s system 99% cpu 37.373 total
+
+on 4bd0ab1 at 2021-04-05-14:47:44 // Data.Map.Strict → Data.Map.IntMap
+% ghc -O solve.hs && time ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}
+./solve trash/samples/5-{01..20} trash/samples/3-{01..20}  34.87s user 0.95s system 99% cpu 35.834 total
+
+# these times have too much noise, they're not reliable...
+
+on ca8baa2 at 2021-04-08-00:41:14 // seed continues with trivial-choice pieces only
+% ghc -O solve.hs && time ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}
+./solve trash/samples/5-{01..20} trash/samples/3-{01..20}  32.24s user 0.97s system 99% cpu 33.327 total
