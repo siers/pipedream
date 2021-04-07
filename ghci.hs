@@ -18,11 +18,8 @@ partEquate m (2,2)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy.Char8 as LBS
 :l solve
-m <- parse =<< readFile "samples/5-1"
-init <- pure $ Continue (0, 0) 0 (0, 0) 0 0 0 0 0
-comp <- pure $ Components (Map.fromList [((0, 0), 1)])
-p <- pure $ Progress 0 0 (Map.singleton (0, 0) init) Map.empty comp [] [] m
-q <- reconnectComponents =<< islandize =<< solve' (-1) True p
+renderImage' "ghci" =<< initProgress =<< parse =<< readFile "samples/5-1"
+q <- reconnectComponents =<< islandize =<< solve' (-1) True =<< initProgress =<< parse =<< readFile "samples/5-1"
 writeFile "out" . LBS.unpack . Aeson.encode . toJSON . (\(Components' c) -> Map.mapKeys show c) . components $ q
 
 renderImage' "ghci" q

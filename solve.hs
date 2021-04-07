@@ -103,8 +103,9 @@ data MMaze = MMaze -- Mutable Maze
   , width :: Int
   , height :: Int
   , size :: Int
-  , sizeLen :: Int -- leading char count for printf %0ni format
+  , sizeLen :: Int -- leading char count for printf %0ni format (~ logBase 10 size + 1.5)
   , level :: Int
+  , trivials :: [Cursor] -- cursors of the edge/cross pieces without choices
   }
 
 -- Continue represents the piece that should be solved next
@@ -145,6 +146,7 @@ data Progress = Progress
 
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Continue
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Progress
+makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''MMaze
 
 instance Show Progress where
   show Progress{iter, priority} =
@@ -161,12 +163,18 @@ instance ToJSON Components
 
 parse :: String -> IO MMaze
 parse input = do
-  board <- V.thaw . V.fromList . map toPiece . zip [0..] . join $ rect
-  pure (MMaze board width height size zeros level)
+  maze <- (\b -> (MMaze b width height size zeros level [])) <$> V.thaw (V.fromList (map snd board))
+  (trivialsL (\_ -> trivials maze)) maze
   where
-    toPiece (i, c) = Piece c False (mazeCursor width i) False False (not (isEdge (mazeCursor width i)))
-    isEdge (x, y) = ((x + 1) `mod` width) < 2 || ((y + 1) `mod` height) < 2
     rect :: [[Pix]] = filter (not . null) . map (map toPix) . lines $ input
+    board = map piece . zip [0..] . join $ rect
+    piece (i, c) = (i, Piece c False (mazeCursor width i) False False (not (edge (mazeCursor width i))))
+    edge (x, y) = ((x + 1) `mod` width) < 2 || ((y + 1) `mod` height) < 2
+    trivials :: MMaze -> IO [Cursor]
+    trivials maze = map (mazeCursor width . fst) <$> filterM (trivial maze) board
+    trivial maze (i, Piece{pipe, inland}) =
+      if inland then pure (pipe == 0b11111111) else (< 2) <$> pieceRotationCount maze (mazeCursor width i)
+
     (width, height) = (length (head rect), (length rect))
     size = width * height
     zeros = floor (logBase 10 (fromIntegral size) + 1.5)
@@ -243,10 +251,10 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
       Piece{pipe, partId, solved} <- mazeRead maze cur
       ch <- colorHash <$> partEquate maze partId
       let cont = Map.lookup cur continues
-      let colo = maybe ch (\c -> if island c == 2 then 0 else (if island c == 1 then 0.5 else 0.7)) cont
+      let colo = maybe ch (\c -> if island c == 2 then 0.25 else (if island c == 1 then 0.5 else 0.7)) cont
       let satu = if solved then 0.3 else (if isJust cont then 1 else 0)
-      let inte = if isJust cont then 1 else 0.5
-      let fill = toPixelRGB $ PixelHSI colo satu inte
+      let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
+      let fill = if not solved && pipe == 0b11111111 then PixelRGB 1 1 1 else toPixelRGB $ PixelHSI colo satu inte
       write image (x * pw + 1, y * ph + 1) fill
       for_ (pixDirections pipe) $ \d ->
         when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
@@ -287,8 +295,8 @@ traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
   where
     tracer mode freq s -- reorder/comment out clauses to disable tracing
       | iter `mod` freq == 0 && mode == 1 = pure solvedStr >>= putStrLn
-      | iter `mod` freq == 0 && mode == 2 = ((clear ++) <$> traceStr) >>= putStrLn
-      | iter `mod` freq == 0 && mode == 3 = traceStr >>= putStrLn
+      | iter `mod` freq == 0 && mode == 2 = traceStr >>= putStrLn
+      | iter `mod` freq == 0 && mode == 3 = ((clear ++) <$> traceStr) >>= putStrLn
       | iter `mod` freq == 0 && mode == 4 = tracer 1 freq s >> void (renderImage' ("trace-" ++ s ++ show iter) progress)
       | True = pure ()
 
@@ -560,9 +568,11 @@ islandize p@Progress{maze, continues} = do
       pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
 -- Progress.components = Components -> Components'
-reconnectComponents :: Progress -> IO Progress
-reconnectComponents p@Progress{maze, continues} = do
-  (\c -> p { components = c }) . Components' . foldr1 (Map.unionWith Set.union) <$> traverse component (Map.toList continues)
+componentRecalc :: Bool -> Progress -> IO Progress
+componentRecalc deep p@Progress{maze, continues} = do
+  comps <- foldr1 (Map.unionWith Set.union) <$> traverse component (Map.toList continues)
+  pure . (\c -> p { components = c }) $
+    if deep then Components' comps else Components (Map.map Set.size comps)
   where component (_, Continue{origin, cursor}) = Map.singleton <$> partEquate maze origin <*> pure (Set.singleton cursor)
 
 {--- Solver ---}
@@ -609,15 +619,17 @@ solve' lifespan first progressInit@Progress{iter, depth, maze=maze@MMaze{size}} 
     backtrack p@Progress{space=(((continue, Progress{depth, priority, continues, components}):guesses):space)} =
       pure (p { depth, priority, continues, components, space = guesses : space }, continue)
 
+initProgress :: MMaze -> IO Progress
+initProgress m@MMaze{trivials} =
+  let
+    init = \(i, c) -> Continue c 0 c 0 (-i) 0 0 1
+    p = Progress 0 0 IntMap.empty Map.empty (Components Map.empty) [] [] m
+  in pure $ foldr (flip prioritizeContinues) p (map init . zip [0..] $ trivials)
+
 solve :: MMaze -> IO MMaze
 solve m = do
-  let init = Continue (0, 0) 0 (0, 0) 0 0 0 0 0
-  let components = Components (Map.fromList [((0, 0), 1)])
-  let p = Progress 0 0 (IntMap.singleton 0 (0, 0)) (Map.singleton (0, 0) init) components [] [] m
-  p <- solve' (-1) False =<< reconnectComponents =<< islandize =<< solve' (-1) True p
-  -- p <- foldrM id p . replicate 30 $ (solve' 100 False =<<) . renderImage' "di0405"
-  let solved@Progress{iter, depth, maze} = p
-
+  solved@Progress{iter, depth, maze} <-
+    solve' (-1) False =<< componentRecalc True =<< islandize =<< solve' (-1) True =<< initProgress m
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   maze <$ renderImage' "done" solved
 
