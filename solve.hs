@@ -237,7 +237,8 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
   writeImage fn =<< freeze mcanvas
   where
     (pw, ph) = (3, 3)
-    canvas = makeImageR VU (width * pw, height * ph) $ const (PixelRGB 0 0 0)
+    border = 3
+    canvas = makeImageR VU ((width + border * 2) * pw, (height + border * 2) * ph) $ const (PixelRGB 0 0 0)
     grid = (,) <$> [0..width - 1] <*> [0..height - 1]
 
     colorHash :: Cursor -> Double
@@ -256,9 +257,9 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
       let satu = if solved then 0.3 else (if isJust cont then 1 else 0)
       let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
       let fill = if not solved && pipe == 0b11111111 then PixelRGB 1 1 1 else toPixelRGB $ PixelHSI colo satu inte
-      write image (x * pw + 1, y * ph + 1) fill
+      write image (border + x * pw + 1, border + y * ph + 1) fill
       for_ (pixDirections pipe) $ \d ->
-        when (Bit.testBit pipe d) $ write image (cursorDelta (x * pw + 1, y * ph + 1) d) fill
+        when (Bit.testBit pipe d) $ write image (cursorDelta (border + x * pw + 1, border + y * ph + 1) d) fill
 
 renderImage' :: String -> Progress -> IO Progress
 renderImage' name p@Progress{maze=maze@MMaze{sizeLen, level}, iter, continues} =
