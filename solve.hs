@@ -17,8 +17,9 @@
 #define TRACESUFFIX ""
 #endif
 
+#define FREQ_DEF 3_000
 #ifndef FREQ
-#define FREQ 3_000
+#define FREQ FREQ_DEF
 #endif
 
 module Main (main, render) where
@@ -116,7 +117,7 @@ data Continue = Continue
   , origin :: PartId
   , score :: Int
   , created :: Int -- unique ID for Ord (total order), taken from Progress.iter
-  , island :: Int -- 0 if not an island or not active, otherwise 1
+  , island :: Int -- >0 if island
   , area :: Int -- island area, 0 if not an island
   , choices :: Int -- number of valid rotations
   } deriving (Generic, Show)
@@ -291,13 +292,19 @@ islandCounts Progress{continues} = bimap getSum getSum . foldMap count $ Map.toL
 traceBoard :: Continue -> Progress -> IO Progress
 traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
   let (mode, freq, suffix) = (TRACE :: Int, FREQ :: Int, TRACESUFFIX :: String)
-  tracer mode freq suffix *> pure progress
+  tracer mode freq suffix False
+  pure progress
   where
-    tracer mode freq s -- reorder/comment out clauses to disable tracing
-      | iter `mod` freq == 0 && mode == 1 = pure solvedStr >>= putStrLn
+    tracer :: Int -> Int -> String -> Bool -> IO ()
+    tracer mode freq s islandish
+      | iter `mod` freq == 0 && mode == 1 = putStrLn solvedStr
       | iter `mod` freq == 0 && mode == 2 = traceStr >>= putStrLn
       | iter `mod` freq == 0 && mode == 3 = ((clear ++) <$> traceStr) >>= putStrLn
-      | iter `mod` freq == 0 && mode == 4 = tracer 1 freq s >> void (renderImage' ("trace-" ++ s ++ show iter) progress)
+      | iter `mod` freq == 0 && mode == 4 = do
+        tracer 1 FREQ_DEF s False
+        when islandish (void (renderImage' "trace" progress))
+      | iter `mod` freq == 0 && mode == 5 =
+        tracer 4 freq s ((> 0) . island . snd $ findContinue progress)
       | True = pure ()
 
     perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
@@ -521,9 +528,9 @@ pieceDead maze components (Continue{cursor=cur, char=this}, _) = do
 
 -- assumptions: no solved or duplicate continues (per cursor) in priority
 {-# INLINE findContinue #-}
-findContinue :: Progress -> IO (Progress, Continue)
+findContinue :: Progress -> (Progress, Continue)
 findContinue p@Progress{priority, continues} = do
-  pure (p { priority = priority', continues = continues' }, continue)
+  (p { priority = priority', continues = continues' }, continue)
   where
     ((_, cursor), priority') = IntMap.deleteFindMin priority
     (continue, continues') = Map.alterF ((, Nothing) . fromJust) cursor continues
@@ -598,14 +605,14 @@ solveContinue
 -- Solves pieces by backtracking, stops when maze is solved.
 solve' :: Int -> Bool -> Progress -> IO Progress
 -- solve' _ _ p@Progress{priority} | Map.null priority = pure p
-solve' lifespan first progressInit@Progress{iter, depth, maze=maze@MMaze{size}} = do
-  (progress@Progress{components}, continue) <- findContinue progressInit
+solve' lifespan first progressInit@Progress{depth, maze=maze@MMaze{size}} = do
+  let (progress@Progress{components}, continue) = findContinue progressInit
 
   rotations <- pieceRotations maze (cursor continue)
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
-  let islandish = iter > 2 && length guesses /= 1
+  let islandish = length guesses /= 1
   let stop = last || lifespan == 0 || (islandish && first)
   (if stop then pure else solve' (lifespan - 1) first) progress'
   where
@@ -629,7 +636,7 @@ initProgress m@MMaze{trivials} =
 solve :: MMaze -> IO MMaze
 solve m = do
   solved@Progress{iter, depth, maze} <-
-    solve' (-1) False =<< componentRecalc True =<< islandize =<< solve' (-1) True =<< initProgress m
+    solve' (-1) False =<< componentRecalc True =<< renderImage' "islandize" =<< islandize =<< solve' (-1) True =<< initProgress m
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   maze <$ renderImage' "done" solved
 
