@@ -9,6 +9,19 @@
 -- json
 {-# LANGUAGE DeriveGeneric #-}
 
+{-|
+Module      : Pipemaze
+Description : solves pipe mazes
+Copyright   : (c) siers
+License     : GPL-3
+Maintainer  : wimuan@email.com
+Stability   : experimental
+Portability : POSIX
+
+A dynamic solver of pipe mazes with an internal priority queue based on scored
+choice counts, position and priority creation /date/.
+-}
+
 #ifndef TRACE
 #define TRACE 1
 #endif
@@ -22,7 +35,10 @@
 #define FREQ FREQ_DEF
 #endif
 
-module Main (main, render) where
+module Pipemaze (
+  -- * Main
+  main
+) where
 
 -- solver
 
@@ -732,6 +748,7 @@ solveFiles file = do
   solved <- solve =<< parse =<< readFile file
   whenM (not <$> verify solved) (putStrLn "solution invalid")
 
+-- | Executable entry point.
 main :: IO ()
 main = do
   websocket <- (== "1") . fromMaybe "0" <$> lookupEnv "websocket"
