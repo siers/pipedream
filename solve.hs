@@ -30,7 +30,7 @@ import Control.Lens.Internal.FieldTH (makeFieldOptics, LensRules(..))
 import Language.Haskell.TH.Syntax (mkName, nameBase)
 import Control.Lens.TH (DefName(..), lensRules)
 
-import Control.Lens ((&), (%~), set, _2)
+import Control.Lens ((&), (%~), set, _2, _3, traverseOf)
 import Control.Monad.Extra (allM, whenM, ifM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad (join, filterM, void, when, mfilter)
@@ -39,13 +39,14 @@ import Control.Monad.Trans.State.Strict (StateT(..))
 import Data.Bifunctor (bimap)
 import Data.Foldable (fold, traverse_, for_, foldrM)
 import Data.Function (on)
+import Data.IntMap.Strict (IntMap)
 import Data.List (elemIndex, foldl')
 import Data.List.Extra (nubOrd)
 import Data.Map.Strict (Map, (!))
-import Data.IntMap.Strict (IntMap)
 import Data.Maybe (fromMaybe, fromJust, isJust)
 import Data.Monoid (Sum(..))
 import Data.Set (Set)
+import Data.Traversable (for)
 import Data.Tuple (swap)
 import Data.Vector.Mutable (MVector)
 import Data.Word (Word8)
@@ -54,13 +55,19 @@ import Graphics.Image.Interface (thaw, MImage, freeze, write)
 import Graphics.Image (writeImage, makeImageR, Pixel(..), toPixelRGB, VU(..), RGB)
 import qualified Control.Monad.Trans.State.Strict as State
 import qualified Data.Bits as Bit
-import qualified Data.Map.Strict as Map
 import qualified Data.IntMap.Strict as IntMap
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import System.Environment (lookupEnv, getArgs)
 import Text.Printf (printf)
+
+-- graph debug
+import Data.Graph.Inductive.Graph (Graph(..))
+import Data.Graph.Inductive.PatriciaTree (Gr)
+import Data.GraphViz (GraphvizCanvas(..), GraphvizCommand(..), GraphvizParams(..), GraphvizOutput(..))
+import Data.GraphViz (runGraphvizCanvas, runGraphvizCommand, graphToDot, nonClusteredParams, toLabel)
 
 -- json for debug outputs
 import Data.Aeson (ToJSON(..))
@@ -133,6 +140,8 @@ type Unwind = [Unwind1]
 
 -- Generic piece for the "fill" (think ms paint) operation
 type FillNext s = MMaze -> Cursor -> Piece -> [(Piece, Direction)] -> StateT s IO [Cursor]
+type IslandId = Int -- only requirement is to be unique among other islands
+type Island = (IslandId, Int, [Continue]) -- id, size, borders
 
 data Progress = Progress
   { iter :: Int -- the total number of backtracking iterations (incl. failed ones)
@@ -550,38 +559,42 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
     flood' fillNext maze (Set.insert cursor visited) next'
 
 islandize :: Progress -> IO Progress
-islandize p@Progress{maze, continues} = do
-  (_, _) <- foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
+islandize p@Progress{continues} = do
   let firstIsland = (\c -> (continues Map.! c) { island = 1 }) . snd <$> IntMap.lookupMin (priority p)
   pure (maybe p (prioritizeContinues p) firstIsland)
-  where
-    borderContinues :: Continues -> Set Cursor -> Bool -> [Continue]
-    borderContinues continues borders active =
-      map (\c -> (continues Map.! c) { island = if active then 1 else 0, area = Set.size borders }) $ Set.toList borders
 
+islands :: Progress -> IO ([Island], Map Cursor IslandId)
+islands Progress{maze=maze@MMaze{width}, continues} = do
+  islands <- snd <$> foldIsland perIsland (map (cursor . snd) . Map.toList $ continues)
+  pure (islands, foldMap (\(id, _, cs) -> Map.fromList $ (, id) <$> map cursor cs) islands)
+  where
     foldIsland perIsland continues =
-      (\acc -> (\(_, b, c) -> (b, c)) <$> foldrM acc (Set.empty, p, (0, Set.empty)) continues)
-        (\cursor acc@(visited, _, _) -> if (cursor `Set.member` visited) then pure acc else perIsland cursor acc)
+      (\acc -> foldrM acc (Set.empty, []) continues) $ \cursor acc@(visited, _) ->
+        if (cursor `Set.member` visited) then pure acc else perIsland cursor acc
 
     -- border = island's border by continues
-    perIsland :: Cursor -> (Set Cursor, Progress, (Int, Set Cursor)) -> IO (Set Cursor, Progress, (Int, Set Cursor))
-    perIsland cursor (visited, p@Progress{continues}, max@(maxSize, _)) = do
-      (_all, borders :: Set Cursor) <- flood (fillNextSolved continues) maze cursor
-      let max' = if Set.size borders > maxSize then (Set.size borders, borders) else max
-      pure (visited `Set.union` borders, foldr (flip prioritizeContinues) p (borderContinues continues borders False), max')
+    perIsland :: Cursor -> (Set Cursor, [Island]) -> IO (Set Cursor, [Island])
+    perIsland cursor (visited, islands) = do
+      (area, borders) <- flood (fillNextSolved continues) maze cursor
+      let island = ((maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)), Set.size area, (continues Map.!) <$> (Set.toList borders))
+      pure (visited `Set.union` borders, island : islands)
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
     fillNextSolved continues _ cur _ deltasWall = do
       when (cur `Map.member` continues) $ State.modify (Set.insert cur)
       pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
--- Progress.components = Components -> Components'
-componentRecalc :: Bool -> Progress -> IO Progress
-componentRecalc deep p@Progress{maze, continues} = do
-  comps <- foldr1 (Map.unionWith Set.union) <$> traverse component (Map.toList continues)
-  pure . (\c -> p { components = c }) $
-    if deep then Components' comps else Components (Map.map Set.size comps)
-  where component (_, Continue{origin, cursor}) = Map.singleton <$> partEquate maze origin <*> pure (Set.singleton cursor)
+graphIslands :: Progress -> IO (Gr String String)
+graphIslands p@Progress{maze, components=Components' components} = do
+  (islands, embedCursor) <- bimap id (Map.!) <$> islands p
+  let
+    nodes = map (\(id, _, _) -> (id, "")) islands
+    connectedIslands island Continue{cursor, origin} =
+      filter (> island) . map embedCursor . filter (/= cursor)
+      . Set.toList . (components Map.!) <$> partEquate maze origin
+    islandContinues = islands >>= traverseOf _3 id
+    edges = for islandContinues (\(id, _, continue) -> map ((id, , "")) <$> connectedIslands id continue)
+  mkGraph nodes . join <$> edges :: IO (Gr String String)
 
 {--- Solver ---}
 
@@ -636,10 +649,30 @@ initProgress m@MMaze{trivials} =
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  solved@Progress{iter, depth, maze} <-
-    solve' (-1) False =<< componentRecalc True =<< renderImage' "islandize" =<< islandize =<< solve' (-1) True =<< initProgress m
+  -- useGraph =<< graphIslands =<< islandize =<< componentRecalc True =<< solve' (-1) True =<< initProgress m
+  p <- solve' (-1) False =<< traceIslands =<< islandize =<< reconnect =<< solve' (-1) True =<< initProgress m
+
+  let solved@Progress{iter, depth, maze} = p
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   maze <$ renderImage' "done" solved
+  where
+    traceIslands = renderImage' "islandize"
+    reconnect = componentRecalc True
+
+    useGraph g = void $ do
+      runGraphvizCanvas Neato graph Xlib
+      runGraphvizCommand Dot graph DotOutput "images/graph.dot"
+      where
+        graph = graphToDot params { isDirected = False } g
+        params = nonClusteredParams { fmtNode = \ (_,l) -> [toLabel l] , fmtEdge = \ (_, _, l) -> [toLabel l] }
+
+    -- Progress.components = Components -> Components'
+    componentRecalc :: Bool -> Progress -> IO Progress
+    componentRecalc deep p@Progress{maze, continues} = do
+      comps <- foldr1 (Map.unionWith Set.union) <$> traverse component (Map.toList continues)
+      pure . (\c -> p { components = c }) $
+        if deep then Components' comps else Components (Map.map Set.size comps)
+      where component (_, Continue{origin, cursor}) = Map.singleton <$> partEquate maze origin <*> pure (Set.singleton cursor)
 
 {--- Main ---}
 

@@ -17,6 +17,8 @@ executable solve
     , bytestring
     , containers
     , extra
+    , fgl
+    , graphviz
     , hip
     , lens
     , network

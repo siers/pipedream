@@ -7,6 +7,8 @@ let
     bytestring
     containers
     extra
+    fgl
+    graphviz
     hip
     lens
     network
@@ -24,5 +26,6 @@ in
       haskell.packages.ghc884.haskell-language-server
       ws
       cabal-install
+      graphviz
     ];
   }
