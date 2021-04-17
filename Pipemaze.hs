@@ -53,6 +53,7 @@ import Control.Monad (join, filterM, void, when, mfilter)
 import Control.Monad.Primitive (RealWorld)
 import Control.Monad.Trans.State.Strict (StateT(..))
 import Data.Bifunctor (bimap)
+import Data.Char (ord)
 import Data.Foldable (fold, traverse_, for_, foldrM)
 import Data.Function (on)
 import Data.IntMap.Strict (IntMap)
@@ -69,6 +70,7 @@ import Data.Word (Word8)
 -- import Debug.Trace (trace)
 import Graphics.Image.Interface (thaw, MImage, freeze, write)
 import Graphics.Image (writeImage, makeImageR, Pixel(..), toPixelRGB, VU(..), RGB)
+import Numeric (showHex)
 import qualified Control.Monad.Trans.State.Strict as State
 import qualified Data.Bits as Bit
 import qualified Data.IntMap.Strict as IntMap
@@ -133,6 +135,7 @@ data MMaze = MMaze -- Mutable Maze
   , sizeLen :: Int -- leading char count for printf %0ni format (~ logBase 10 size + 1.5)
   , level :: Int
   , trivials :: [Cursor] -- cursors of the edge/cross pieces without choices
+  , mazeId :: String
   }
 
 -- Continue represents the piece that should be solved next
@@ -192,9 +195,10 @@ instance ToJSON Components
 
 parse :: String -> IO MMaze
 parse input = do
-  maze <- (\b -> (MMaze b width height size zeros level [])) <$> V.thaw (V.fromList (map snd board))
+  maze <- (\b -> (MMaze b width height size zeros level [] mazeId)) <$> V.thaw (V.fromList (map snd board))
   (trivialsL (\_ -> trivials maze)) maze
   where
+    mazeId = showHex (foldr (\a b -> (ord a + b) `mod` (2 ^ 16)) 0 input) ""
     rect :: [[Pix]] = filter (not . null) . map (map toPix) . lines $ input
     board = map piece . zip [0..] . join $ rect
     piece (i, c) = (i, Piece c False (mazeCursor width i) False False (not (edge (mazeCursor width i))))
@@ -266,7 +270,7 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
   where
     (pw, ph) = (3, 3)
     border = 3
-    canvas = makeImageR VU ((width + border * 2) * pw, (height + border * 2) * ph) $ const (PixelRGB 0 0 0)
+    canvas = makeImageR VU ((width + 2) * pw, (height + 2) * ph) $ const (PixelRGB 0 0 0)
     grid = (,) <$> [0..width - 1] <*> [0..height - 1]
 
     colorHash :: Cursor -> Double
@@ -290,8 +294,8 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
         when (Bit.testBit pipe d) $ write image (cursorDelta (border + x * pw + 1, border + y * ph + 1) d) fill
 
 renderImage' :: String -> Progress -> IO Progress
-renderImage' name p@Progress{maze=maze@MMaze{sizeLen, level}, iter, continues} =
-  p <$ renderImage (printf ("images/lvl%i-%s-%0*i.png") level name sizeLen iter) maze continues
+renderImage' name p@Progress{maze=maze@MMaze{sizeLen, level, mazeId}, iter, continues} =
+  p <$ renderImage (printf ("images/lvl%i-%s-%0*i-%s.png") level mazeId sizeLen iter name) maze continues
 
 renderWithPositions :: Maybe Continue -> Progress -> IO String
 renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} =
