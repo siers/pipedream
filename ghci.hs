@@ -25,6 +25,8 @@ writeFile "out" . LBS.unpack . Aeson.encode . toJSON . (\(Components' c) -> Map.
 renderImage' "ghci" q
 nub . map (area . snd) . Map.toList . continues . fst $ q
 
+preview $ (mkGraph [(1, "")] [] :: Gr String String)
+
 import qualified Data.List as L
 L.sort . map snd . Map.toList <$> islandize' q
 -- unique island sizes (slightly smaller number than the number of islands, but close)

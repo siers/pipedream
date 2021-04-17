@@ -83,7 +83,10 @@ import Text.Printf (printf)
 import Data.Graph.Inductive.Graph (Graph(..))
 import Data.Graph.Inductive.PatriciaTree (Gr)
 import Data.GraphViz (GraphvizCanvas(..), GraphvizCommand(..), GraphvizParams(..), GraphvizOutput(..))
-import Data.GraphViz (runGraphvizCanvas, runGraphvizCommand, graphToDot, nonClusteredParams, toLabel)
+import Data.GraphViz.Attributes.Colors (WeightedColor(..))
+import Data.GraphViz.Attributes.Complete (Color(..), Attribute(..), Shape(..), Overlap(..), EdgeType(..), DPoint(..), createPoint)
+import Data.GraphViz (runGraphvizCanvas, runGraphvizCommand, graphToDot, nonClusteredParams)
+import Control.Concurrent (forkIO)
 
 -- json for debug outputs
 import Data.Aeson (ToJSON(..))
@@ -279,7 +282,7 @@ renderImage fn maze@MMaze{width, height} continues = seq continues $ do
       ch <- colorHash <$> partEquate maze partId
       let cont = Map.lookup cur continues
       let colo = maybe ch (\c -> if island c == 2 then 0.25 else (if island c == 1 then 0.5 else 0.7)) cont
-      let satu = if solved then 0.3 else (if isJust cont then 1 else 0)
+      let satu = if solved then 0.15 else (if isJust cont then 1 else 0)
       let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
       let fill = if not solved && pipe == 0b11111111 then PixelRGB 1 1 1 else toPixelRGB $ PixelHSI colo satu inte
       write image (border + x * pw + 1, border + y * ph + 1) fill
@@ -600,17 +603,17 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       when (cur `Map.member` continues) $ State.modify (Set.insert cur)
       pure . map (cursorDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
-graphIslands :: Progress -> IO (Gr String String)
+graphIslands :: Progress -> IO (Gr Island String)
 graphIslands p@Progress{maze, components=Components' components} = do
   (islands, embedCursor) <- bimap id (Map.!) <$> islands p
   let
-    nodes = map (\(id, _, _) -> (id, "")) islands
+    nodes = map (\island@(id, _, _) -> (id, island)) islands
     connectedIslands island Continue{cursor, origin} =
-      filter (> island) . map embedCursor . filter (/= cursor)
-      . Set.toList . (components Map.!) <$> partEquate maze origin
+      nubOrd . filter (> island) . map embedCursor . filter (/= cursor)
+      . foldMap Set.toList . (`Map.lookup` components) <$> partEquate maze origin
     islandContinues = islands >>= traverseOf _3 id
     edges = for islandContinues (\(id, _, continue) -> map ((id, , "")) <$> connectedIslands id continue)
-  mkGraph nodes . join <$> edges :: IO (Gr String String)
+  mkGraph nodes . join <$> edges
 
 {--- Solver ---}
 
@@ -665,8 +668,10 @@ initProgress m@MMaze{trivials} =
 
 solve :: MMaze -> IO MMaze
 solve m = do
-  -- useGraph =<< graphIslands =<< islandize =<< componentRecalc True =<< solve' (-1) True =<< initProgress m
-  p <- solve' (-1) False =<< traceIslands =<< islandize =<< reconnect =<< solve' (-1) True =<< initProgress m
+  p <- initProgress m
+  p <- islandize =<< reconnect =<< solve' (-1) True p
+  p <- useGraph =<< solve' 300000 False =<< traceIslands p
+  -- p <- foldrM id p . replicate 10 $ (\p -> useGraph =<< solve' 300000 False =<< traceIslands p)
 
   let solved@Progress{iter, depth, maze} = p
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
@@ -675,12 +680,24 @@ solve m = do
     traceIslands = renderImage' "islandize"
     reconnect = componentRecalc True
 
-    useGraph g = void $ do
+    useGraph p = (p <$) . forkIO . void $ do
+      graph <- graphToDot params { isDirected = False } <$> graphIslands p
       runGraphvizCanvas Neato graph Xlib
-      runGraphvizCommand Dot graph DotOutput "images/graph.dot"
+      runGraphvizCommand Neato graph DotOutput "images/graph.dot"
       where
-        graph = graphToDot params { isDirected = False } g
-        params = nonClusteredParams { fmtNode = \ (_,l) -> [toLabel l] , fmtEdge = \ (_, _, l) -> [toLabel l] }
+        params = nonClusteredParams { fmtNode = \(_, (_id, size, _cont)) ->
+          [ Shape PointShape
+          , Width (log (1.1 + (fromIntegral size) / 500))
+          , NodeSep 0.01
+          , Sep (PVal (createPoint 10 10))
+          -- , Overlap ScaleXYOverlaps
+          -- , Overlap VoronoiOverlap
+          , Overlap (PrismOverlap (Just 4000))
+          , LWidth 1000
+          , Splines SplineEdges
+          , Color [WC (RGB 252 160 18) Nothing]
+          ]
+        }
 
     -- Progress.components = Components -> Components'
     componentRecalc :: Bool -> Progress -> IO Progress
