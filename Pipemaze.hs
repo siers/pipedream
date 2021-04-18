@@ -735,6 +735,7 @@ backtrack p@Progress{space=(((continue, Progress{depth, priority, continues, com
 -- | Solves pieces by backtracking, stops when the maze is solved, lifespan reached or first choice encountered.
 solve' :: Int -> Bool -> Progress -> IO Progress
 -- solve' _ _ p@Progress{priority} | Map.null priority = pure p
+solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
 solve' lifespan first progressInit@Progress{depth, maze=maze@MMaze{size}} = do
   let (progress@Progress{components}, continue) = findContinue progressInit
 
@@ -743,11 +744,10 @@ solve' lifespan first progressInit@Progress{depth, maze=maze@MMaze{size}} = do
   progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
 
   let islandish = length guesses /= 1
-  let stop = last || lifespan == 0 || (islandish && first)
+  let stop = depth == size - 1 || lifespan == 0 || (islandish && first)
   (if stop then pure else solve' (lifespan - 1) first) progress'
   where
-    last = depth == size - 1
-    removeDead components = if last then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
+    removeDead components = if (depth == size - 1) then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
 
 initProgress :: MMaze -> IO Progress
 initProgress m@MMaze{trivials} =
