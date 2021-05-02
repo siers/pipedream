@@ -582,26 +582,28 @@ compConnected _ _ = []
 {--- Solver bits: continues ---}
 
 {-# INLINE deltaContinue #-}
-deltaContinue :: Continue -> Int -> Fursor -> Direction -> Piece -> Continue
-deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initChoices} = do
+deltaContinue :: Continue -> Int -> Fursor -> Direction -> Piece -> Maybe Continue -> Continue
+deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initChoices} prev = do
   let pointed = char `Bit.testBit` from
   let origin' = if pointed then origin else c
   let island' = min 2 (island * 2)
   let dir = ((from + 2) `mod` 4)
 
-  let validRot = pixNDirections (initChoices `Bit.shiftR` choicesInvalid)
+  let initChoices' = maybe initChoices choices prev
+  let validRot = pixNDirections (initChoices' `Bit.shiftR` choicesInvalid)
   let invalids = filter (\r -> pointed /= (Bit.testBit (rotate r pipe) dir)) validRot
-  let choices :: Int = foldr (\d s -> s - Bit.bit choicesCount + Bit.bit (choicesInvalid + d)) initChoices invalids
+  let choices' :: Int = foldr (\d s -> s - Bit.bit choicesCount + Bit.bit (choicesInvalid + d)) initChoices' invalids
   let solveds = Bit.bit (dir + choicesSolveds)
   let require = fromEnum pointed `Bit.shiftL` (dir + choicesRequire)
-  Continue c pipe origin' 0 id island' area (choices Bit..|. require Bit..|. solveds)
+
+  Continue c pipe origin' 0 id island' area (choices' Bit..|. require Bit..|. solveds)
 
 {-# INLINE prioritizeDeltas #-}
 -- | Calls 'prioritizeContinues' on nearby pieces (delta = 1)
 prioritizeDeltas :: Int -> Progress -> Continue -> IO Progress
 prioritizeDeltas width p@Progress{iter, maze} continue@Continue{cursor=cur, choices} = do
   (\f -> foldrM f p (zip [0..] (pixNDirections choices))) $ \(i, d) p' -> do
-    prioritizeContinues p' . deltaContinue continue (iter * 4 + i) (mazeFDelta width cur d) d
+    prioritizeContinues p' (mazeFDelta width cur d) . deltaContinue continue (iter * 4 + i) (mazeFDelta width cur d) d
       <$> mazeRead maze (mazeFDelta width cur d)
 
 {-# INLINE prioritizeIslands #-}
@@ -617,7 +619,7 @@ prioritizeIslands directDeltas p@Progress{maze, components = (Components' _)} = 
     prioritizeIsland :: PartId -> Progress -> Progress
     prioritizeIsland k p =
       (\f -> foldr f p (compConnected k (components p))) $
-        (\c p@Progress{continues} -> prioritizeContinues p (continues IntMap.! c) { island = 1 })
+        (\c p -> prioritizeContinues p c (set islandL 1 . fromJust))
 
 {-# INLINE rescoreContinue #-}
 -- | Recalculates the 'Continue's score, less is better (because of 'IntMap.deleteFindMin' in 'findContinue').
@@ -630,22 +632,20 @@ rescoreContinue width c@Continue{cursor, choices, island, created} =
 
 {-# INLINE prioritizeContinues #-}
 -- | Inserts or reprioritizes 'Continue'
-prioritizeContinues :: Progress -> Continue -> Progress
-prioritizeContinues progress@Progress{maze=MMaze{width}, priority, continues, components} continue =
+prioritizeContinues :: Progress -> Fursor -> (Maybe Continue -> Continue) -> Progress
+prioritizeContinues progress@Progress{maze=MMaze{width}, priority, continues, components} cursor getCont =
   (\((p, cp), cn) -> progress { priority = p, components = cp, continues = cn }) $
-    (\c@Continue{cursor} -> IntMap.alterF (insertContinue (priority, components) c) cursor continues) $
-      rescoreContinue width continue
+    IntMap.alterF (insertContinue (priority, components) getCont) cursor continues
   where
     {-# INLINE insertContinue #-}
-    insertContinue :: (Priority, Components) -> Continue -> Maybe Continue -> ((Priority, Components), Maybe Continue)
-    insertContinue (p, c) new@Continue{cursor} Nothing =
-      ((IntMap.insert (score new) cursor p, compInsert new c), Just new)
-    insertContinue (p, c) new'@Continue{choices = cn} (Just (exists@Continue{cursor, created, choices = ce})) =
-      ((contModify p, c), Just (putback))
+    insertContinue :: (Priority, Components) -> (Maybe Continue -> Continue) -> Maybe Continue -> ((Priority, Components), Maybe Continue)
+    insertContinue (p, c) getCont Nothing =
+      let new@Continue{cursor} = rescoreContinue width (getCont Nothing)
+      in ((IntMap.insert (score new) cursor p, compInsert new c), Just new)
+    insertContinue (p, c) getCont (Just (exists@Continue{cursor, created})) =
+      ((contModify p, c), Just putback)
       where
-        new = rescoreContinue width new' { choices, created }
-        choicesHalf = (Bit.bit choicesCount - 1) Bit..&. (ce Bit..|. cn)
-        choices = (Bit.shiftL (choiceCount choicesHalf) choicesCount) Bit..|. choicesHalf
+        new@Continue{choices} = rescoreContinue width (getCont (Just exists)) { created }
         (putback, contModify) =
           if score new < score exists
           then (new, IntMap.insert (score new) cursor . IntMap.delete (score exists))
@@ -686,9 +686,9 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
     flood' fillNext maze (Set.insert cursor visited) next'
 
 islandize :: Progress -> IO Progress
-islandize p@Progress{continues} = do
-  let firstIsland = (\c -> (continues IntMap.! c) { island = 1 }) . snd <$> IntMap.lookupMin (priority p)
-  pure (maybe p (prioritizeContinues p) firstIsland)
+islandize p = do
+  let firstIsland = snd <$> IntMap.lookupMin (priority p)
+  pure (maybe p (\cursor -> prioritizeContinues p cursor (set islandL 1 . fromJust)) firstIsland)
 
 islands :: Progress -> IO ([Island], IntMap IslandId)
 islands Progress{maze=maze@MMaze{width}, continues} = do
@@ -795,7 +795,7 @@ initProgress m@MMaze{trivials} =
     -- init continue created is probably not well scored, I don't understand why this doesn't break
     init = \(i, c) -> (\Piece{pipe, initChoices} -> Continue c pipe c 0 (-i) 0 0 initChoices) <$> mazeRead m c
     p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] [] m
-  in foldr (flip prioritizeContinues) p <$> traverse init (zip [0..] trivials)
+  in foldr (\c@Continue{cursor} p -> prioritizeContinues p cursor (return c)) p <$> traverse init (zip [0..] trivials)
 
 -- | Solver main, returns solved maze
 solve :: MMaze -> IO MMaze
