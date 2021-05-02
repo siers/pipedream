@@ -174,7 +174,7 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
 • update with better scores through continues, join origins
 • bring back Continue{created}, because we don't need guessable scores if we have `continues'
 
-2021-03-13-13:35:17
+2021-03-13-13:35:17 - 2021-04-18-19:59:38
 ✔ solve whole islands (Continue.islandWeight) on 6 and continue with continuations of islands
 ✗ fillNextSolved with mutable sets (no such thing)
 ✔ make components available as Map PartId (Set Cursor)
@@ -187,7 +187,9 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
   • add all init continues with choices = 0 (crosses and edge pieces)
   • continues :: Data.IntMap.Strict Int Continue, problems: deltas must be precomputed (Wall, Cursor)^4) or just bit-packed directions
   • cache next (bit-packed directions, .&. when reprioritizing)
-    • update in continues, make priority :: Map PartId Cursor
+    • make choices :: Int, bit-packed as choices + enabled + set
+    • see if manual check+update is better than alterF
+    ✔ update in continues, make priority :: Map PartId Cursor
   • continues: use choice count for space
   • unboxed/storable vectors
 • visual upgrades:
@@ -204,6 +206,11 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
 2021-03-18-18:09:33
 data Continue = Continue { .. + islandWeight :: Int = 0, island :: Boolean = False }
 data Piece = Piece { .. + island :: Boolean = Continue.island }
+
+-      let satu = if solved then 0.15 else (if isJust cont then 1 else 0)
+-      let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
++      let satu = if solved then 1.0 else (if isJust cont then 0.5 else 0)
++      let inte = if solved then 0.25 else (if isJust cont then 1 else 0.0)
 
 --
 

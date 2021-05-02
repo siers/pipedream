@@ -77,3 +77,17 @@ import Language.Haskell.TH.Syntax (mkName, nameBase)
 import Control.Lens.TH (DefName(..), lensRules)
 suffixLNamer = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase)
 :t makeFieldOptics lensRules { _fieldToDef = suffixLNamer }
+
+-- 2021-05-01-16:53:57
+
+import Numeric (showIntAtBase)
+import Data.Char (intToDigit)
+:l Pipemaze
+p <- initProgress =<< parse =<< readFile "samples/1"
+(Map.! (0, 1)) $ continues p
+showBin . flip Bit.shiftR choicesInvalid . initChoices . (V.! 8) <$> V.freeze (board (maze p))
+
+flip Bit.shiftR choicesCount  . choices . snd <$> Map.toList (continues p)
+showBin = flip (showIntAtBase 2 intToDigit) ""
+-- V.map (showBin . flip Bit.shiftR choicesInvalid . initChoices) <$> V.freeze (board (maze p))
+showBin . flip Bit.shiftR choicesInvalid . initChoices . V.head <$> V.freeze (board (maze p))
