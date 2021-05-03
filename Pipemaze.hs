@@ -48,8 +48,7 @@ This combined lets you solve around 98% of the level 6 maze determinstically, bu
 module Pipemaze (
   -- * Types
   Direction, Rotation, Pix, Cursor, Fursor, MMaze(..), Piece(..), Choices, PartId, Continue(..)
-  , Priority, Continues, Components(..), Unwind, Progress(..)
-  , IslandId, Island
+  , Priority, Continues, Components(..), Unwind, Progress(..), Island(..)
   -- * Maze operations
   , parse, mazeStore, mazeBounded, mazeRead, mazeSolve, mazeDelta, mazeFDelta, mazeEquate, mazePop, partEquate
   -- * Tracing and rendering
@@ -65,7 +64,7 @@ module Pipemaze (
   , deltaContinue, prioritizeDeltas, prioritizeIslands, rescoreContinue, prioritizeContinues
   , pieceDead, findContinue
   -- * Island computations
-  , FillNext, flood, islandize, islands, graphIslands, previewIslands
+  , FillNext, flood, islandizeFirst, islandizeArea, islands, graphIslands, previewIslands
   -- * Solver brain
   , solveContinue, solve', initProgress, backtrack, solve
   -- * Main
@@ -78,7 +77,7 @@ import Control.Lens.Internal.FieldTH (makeFieldOptics, LensRules(..))
 import Language.Haskell.TH.Syntax (mkName, nameBase)
 import Control.Lens.TH (DefName(..), lensRules)
 
-import Control.Lens ((&), (%~), set, _2, _3, traverseOf)
+import Control.Lens ((&), (%~), set, _2)
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad (join, filterM, void, when, mfilter)
@@ -213,9 +212,13 @@ data Components
 -- | For mutable backtracking
 type Unwind = (Fursor, Piece)
 
--- | Unique arbitrary value
-type IslandId = Int
-type Island = (IslandId, Int, [Continue]) -- ^ id, size, borders
+-- | Island is the patch of unsolved pieces surrounded by solved pieces, computed by `flood` in `islands`.
+data Island = Island
+  { iId :: Int
+  , iSize :: Int
+  , iConts :: [Continue]
+  , iNeighb :: Int -- ^ number of distinct neighbouring components
+  } deriving (Generic, Show)
 
 data Progress = Progress
   { iter :: Int -- ^ the total number of backtracking iterations (incl. failed ones)
@@ -232,6 +235,7 @@ makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (+
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Piece
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Continue
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Progress
+makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Island
 
 -- | unlawful
 instance Show Progress where
@@ -246,6 +250,7 @@ instance Show MMaze where
 instance ToJSON Piece
 instance ToJSON Continue
 instance ToJSON Components
+instance ToJSON Island
 
 {--- MMaze and Matrix operations ---}
 
@@ -586,7 +591,7 @@ deltaContinue :: Continue -> Int -> Fursor -> Direction -> Piece -> Maybe Contin
 deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initChoices} prev = do
   let pointed = char `Bit.testBit` from
   let origin' = if pointed then origin else c
-  let island' = min 2 (island * 2)
+  let island' = min 4 (island * 2) -- islands get bumped once to set area, next time to solve islands whole
   let dir = ((from + 2) `mod` 4)
 
   let initChoices' = maybe initChoices choices prev
@@ -626,9 +631,9 @@ prioritizeIslands directDeltas p@Progress{maze, components = (Components' _)} = 
 --
 -- > score = (0 - island << 17 + (choices << (15 - choicesCount)) + x + y) << 32 + created
 rescoreContinue :: Int -> Continue -> Continue
-rescoreContinue width c@Continue{cursor, choices=choicesBits, island, created} = set scoreL score c
+rescoreContinue width c@Continue{cursor, choices=choicesBits, island, area, created} = set scoreL score c
   where
-    score = (0 - island << 17 + (choices << (15 - choicesCount)) + x + y) << 32 + created
+    score = (0 - island << 27 + area << 15 + (choices << (12 - choicesCount)) + x + y) << 28 + created
     choices = choicesBits Bit..&. (0b11 << choicesCount)
     (<<) = Bit.shiftL
     (x, y) = mazeCursor width cursor
@@ -688,15 +693,24 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
     let next' = filter (not . flip Set.member visited) more ++ next
     flood' fillNext maze (Set.insert cursor visited) next'
 
-islandize :: Progress -> IO Progress
-islandize p = do
+islandizeFirst :: Progress -> IO Progress
+islandizeFirst p = do
   let firstIsland = snd <$> IntMap.lookupMin (priority p)
   pure (maybe p (\cursor -> prioritizeContinues p cursor (set islandL 1 . fromJust)) firstIsland)
 
-islands :: Progress -> IO ([Island], IntMap IslandId)
+islandizeArea :: Progress -> IO Progress
+islandizeArea p = do -- (islandizeFirst =<<) $
+  (reduce p . fst <$> islands p <*>) . pure $ \_i@Island{iConts} p ->
+    reduce p iConts $ \Continue{cursor} p ->
+      prioritizeContinues p cursor (set islandL 1 . fromJust) -- . set areaL (area _i) -- makes ratio significantly worse
+  where
+    -- area Island{iSize, iConts, iNeighb} = 0 -- no dumb
+    reduce a l f = foldr f a l
+
+islands :: Progress -> IO ([Island], IntMap Int)
 islands Progress{maze=maze@MMaze{width}, continues} = do
   islands <- snd <$> foldIsland perIsland (map (mazeCursor width . cursor . snd) . IntMap.toList $ continues)
-  pure (islands, foldMap (\(id, _, cs) -> IntMap.fromList $ (, id) <$> map cursor cs) islands)
+  pure (islands, foldMap (\Island{iId, iConts = cs} -> IntMap.fromList $ (, iId) <$> map cursor cs) islands)
   where
     foldIsland perIsland continues =
       (\acc -> foldrM acc (Set.empty, []) continues) $ \cursor acc@(visited, _) ->
@@ -706,7 +720,9 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
     perIsland :: Cursor -> (Set Cursor, [Island]) -> IO (Set Cursor, [Island])
     perIsland cursor (visited, islands) = do
       (area, borders) <- flood (fillNextSolved continues) maze cursor
-      let island = ((maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)), Set.size area, (continues IntMap.!) . (\(x, y) -> x + y * width) <$> (Set.toList borders))
+      let iConts = (continues IntMap.!) . (\(x, y) -> x + y * width) <$> (Set.toList borders)
+      -- iNeigh <- length . nubOrd <$> traverse (partEquate maze . origin) iConts
+      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts 0 -- iNeigh
       pure (visited `Set.union` borders, island : islands)
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
@@ -719,12 +735,12 @@ graphIslands Progress{components=Components _} = pure (mkGraph [] [])
 graphIslands p@Progress{maze, components=Components' components} = do
   (islands, embedCursor) <- bimap id (IntMap.!) <$> islands p
   let
-    nodes = map (\island@(id, _, _) -> (id, island)) islands
+    nodes = map (\island@Island{iId} -> (iId, island)) islands
     connectedIslands island Continue{cursor, origin} =
       nubOrd . filter (> island) . map embedCursor . filter (/= cursor)
       . foldMap Set.toList . (`IntMap.lookup` components) <$> partEquate maze origin
-    islandContinues = islands >>= traverseOf _3 id
-    edges = for islandContinues (\(id, _, continue) -> map ((id, , "")) <$> connectedIslands id continue)
+    islandContinues = islands >>= \Island{iId, iConts} -> (iId, ) <$> iConts
+    edges = for islandContinues (\(id, continue) -> map ((id, , "")) <$> connectedIslands id continue)
   mkGraph nodes . join <$> edges
 
 previewIslands :: Progress -> IO Progress
@@ -733,9 +749,9 @@ previewIslands p = (p <$) . forkIO . void $ do
   runGraphvizCanvas Neato graph Xlib
   runGraphvizCommand Neato graph DotOutput "images/graph.dot"
   where
-    params = nonClusteredParams { fmtNode = \(_, (_id, size, _cont)) ->
+    params = nonClusteredParams { fmtNode = \(_, Island{iSize}) ->
       [ Shape PointShape
-      , Width (log (1.1 + (fromIntegral size) / 500))
+      , Width (log (1.1 + (fromIntegral iSize) / 500))
       , NodeSep 0.01
       , Sep (PVal (createPoint 10 10))
       -- , Overlap ScaleXYOverlaps
@@ -804,7 +820,7 @@ initProgress m@MMaze{trivials} =
 solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
-  p <- islandize =<< componentRecalc True =<< solve' (-1) True p
+  p <- islandizeArea =<< componentRecalc True =<< solve' (-1) True p
   p <- solve' (-1) False =<< traceIslands p
   -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
 
