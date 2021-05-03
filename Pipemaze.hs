@@ -88,6 +88,7 @@ import Data.Char (ord)
 import Data.Foldable (traverse_, for_, foldrM)
 import Data.Function (on)
 import Data.IntMap.Strict (IntMap)
+import Data.IntSet (IntSet)
 import Data.List (elemIndex)
 import Data.List.Extra (nubOrd)
 import Data.Map.Strict (Map, (!))
@@ -105,6 +106,7 @@ import Numeric (showHex)
 import qualified Control.Monad.Trans.State.Strict as State
 import qualified Data.Bits as Bit
 import qualified Data.IntMap.Strict as IntMap
+import qualified Data.IntSet as IntSet
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Vector as V
@@ -206,7 +208,7 @@ type Continues = IntMap Continue
 -- | The index of components' continues by their 'PartId' (which are always up-to-date).
 data Components
   = Components (IntMap Int) -- ^ marginally faster, but less info
-  | Components' (IntMap (Set Fursor))
+  | Components' (IntMap IntSet)
   deriving (Show, Generic)
 
 -- | For mutable backtracking
@@ -551,12 +553,12 @@ pieceChoices maze@MMaze{width} cur@(x, y) = do
 {-# INLINE compInsert #-}
 compInsert :: Continue -> Components -> Components
 compInsert Continue{origin} (Components c) = Components (IntMap.insertWith (+) origin 1 c)
-compInsert Continue{origin, cursor} (Components' c) = Components' (IntMap.insertWith (Set.union) origin (Set.singleton cursor) c)
+compInsert Continue{origin, cursor} (Components' c) = Components' (IntMap.insertWith (IntSet.union) origin (IntSet.singleton cursor) c)
 
 {-# INLINE compRemove #-}
 compRemove :: PartId -> Fursor -> Components -> Components
 compRemove origin _cursor (Components c) = Components (IntMap.update (Just . (subtract 1)) origin c)
-compRemove origin cursor (Components' c) = Components' (IntMap.update (Just . Set.delete cursor) origin c)
+compRemove origin cursor (Components' c) = Components' (IntMap.update (Just . IntSet.delete cursor) origin c)
 
 {-# INLINE compEquate #-}
 compEquate :: PartId -> [PartId] -> Components -> Components
@@ -577,11 +579,11 @@ compEquate hub connections c = equate c
 {-# INLINE compAlive #-}
 compAlive :: PartId -> Components -> Bool
 compAlive k (Components c) = (Just 1 ==) $ IntMap.lookup k c
-compAlive k (Components' c) = (Just 1 ==) . fmap Set.size $ IntMap.lookup k c
+compAlive k (Components' c) = (Just 1 ==) . fmap IntSet.size $ IntMap.lookup k c
 
 {-# INLINE compConnected #-}
 compConnected :: PartId -> Components -> [Fursor]
-compConnected k (Components' c) = foldMap Set.toList (IntMap.lookup k c)
+compConnected k (Components' c) = foldMap IntSet.toList (IntMap.lookup k c)
 compConnected _ _ = []
 
 {--- Solver bits: continues ---}
@@ -738,7 +740,7 @@ graphIslands p@Progress{maze, components=Components' components} = do
     nodes = map (\island@Island{iId} -> (iId, island)) islands
     connectedIslands island Continue{cursor, origin} =
       nubOrd . filter (> island) . map embedCursor . filter (/= cursor)
-      . foldMap Set.toList . (`IntMap.lookup` components) <$> partEquate maze origin
+      . foldMap IntSet.toList . (`IntMap.lookup` components) <$> partEquate maze origin
     islandContinues = islands >>= \Island{iId, iConts} -> (iId, ) <$> iConts
     edges = for islandContinues (\(id, continue) -> map ((id, , "")) <$> connectedIslands id continue)
   mkGraph nodes . join <$> edges
@@ -834,10 +836,10 @@ solve m = do
     -- Progress.components = Components -> Components'
     componentRecalc :: Bool -> Progress -> IO Progress
     componentRecalc deep p@Progress{maze, continues} = do
-      comps <- foldr (IntMap.unionWith Set.union) IntMap.empty <$> traverse component (IntMap.toList continues)
+      comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
       pure . (\c -> p { components = c }) $
-        if deep then Components' comps else Components (IntMap.map Set.size comps)
-      where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (Set.singleton cursor)
+        if deep then Components' comps else Components (IntMap.map IntSet.size comps)
+      where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
 
 {--- Main ---}
 
