@@ -392,3 +392,7 @@ on ca8baa2 at 2021-04-08-00:41:14 // seed continues with trivial-choice pieces o
 on at 2021-05-02-13:05:53 // flat cursors
 % ghc Main.hs -o solve && time ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}
 ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}  25.15s user 0.97s system 99% cpu 26.140 total
+
+on 029ff2c at 2021-05-03-15:30:03 // Components IntMap IntSet
+ghc Main.hs -o solve && time ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}
+./solve trash/samples/5-{01..20} trash/samples/3-{01..20}  24.55s user 0.94s system 99% cpu 25.498 total

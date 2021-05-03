@@ -115,13 +115,15 @@ import System.Environment (lookupEnv, getArgs)
 import Text.Printf (printf)
 
 -- graph debug
+import Control.Concurrent (forkIO)
 import Data.Graph.Inductive.Graph (Graph(..))
 import Data.Graph.Inductive.PatriciaTree (Gr)
-import Data.GraphViz (GraphvizCanvas(..), GraphvizCommand(..), GraphvizParams(..), GraphvizOutput(..))
+-- import Data.Graph.Inductive.Query.ArtPoint (ap)
+-- import Data.Graph.Inductive.Query.DFS (isConnected)
 import Data.GraphViz.Attributes.Colors (WeightedColor(..))
 import Data.GraphViz.Attributes.Complete (Color(..), Attribute(..), Shape(..), Overlap(..), EdgeType(..), DPoint(..), createPoint)
+import Data.GraphViz (GraphvizCanvas(..), GraphvizCommand(..), GraphvizParams(..), GraphvizOutput(..))
 import Data.GraphViz (runGraphvizCanvas, runGraphvizCommand, graphToDot, nonClusteredParams)
-import Control.Concurrent (forkIO)
 
 -- json for debug outputs
 import Data.Aeson (ToJSON(..))
@@ -443,7 +445,7 @@ traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
         tracer 1 FREQ_DEF False
         when islandish (void (renderImage' ("trace") progress))
       | iter `mod` freq == 0 && mode == 5 =
-        tracer 4 freq ((> 0) . island . snd $ findContinue progress)
+        tracer 4 freq ((> 0) . island $ findContinue progress)
       | True = pure ()
 
     perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
@@ -671,12 +673,12 @@ pieceDead maze@MMaze{width=w} components (Continue{cursor=cur, char=this}, _) = 
 
 -- | Pops `priority` by `score`, deletes from `continues`.
 {-# INLINE findContinue #-}
-findContinue :: Progress -> (Progress, Continue)
-findContinue p@Progress{priority, continues} = do
-  (p { priority = priority', continues = continues' }, continue)
-  where
-    ((_, cursor), priority') = IntMap.deleteFindMin priority
-    (continue, continues') = IntMap.alterF ((, Nothing) . fromJust) cursor continues
+findContinue :: Progress -> Continue
+findContinue Progress{priority, continues} = continues IntMap.! snd (IntMap.findMin priority)
+
+popContinue :: Progress -> Progress
+popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = IntMap.delete cursor c }
+  where ((_, cursor), priority) = IntMap.deleteFindMin pr
 
 {--- Island computations ---}
 
@@ -785,24 +787,25 @@ solveContinue
     progress' <- prioritizeIslands directDeltas =<< prioritizeDeltas width progress { components } continue { origin }
     traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
 
--- | 'space' stack, 'Progress' and 'MMaze' backtracking operations
-backtrack :: Progress -> IO (Progress, Continue)
-backtrack Progress{space=[]} = error "unsolvable"
-backtrack Progress{space=([]:_), unwinds=[]} = error "unlikely"
-backtrack p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazePop maze unwind >> backtrack p { space, unwinds }
-backtrack p@Progress{space=(((continue, Progress{depth, priority, continues, components}):guesses):space)} =
-  pure (p { depth, priority, continues, components, space = guesses : space }, continue)
+-- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
+-- This returns a progress with 'space' that always has an element or the maze isn't solvable
+-- (assuming the algo's correct and the stack hasn't been split for divide and conquer).
+backtrack :: Bool -> Progress -> IO (Progress, Continue)
+backtrack _ Progress{space=[]} = error "unsolvable"
+backtrack _ Progress{space=([]:_), unwinds=[]} = error "unlikely"
+backtrack _ p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazePop maze unwind >> backtrack True p { space, unwinds }
+backtrack _popped Progress{space=(((continue, p):guesses):space), unwinds, iter} = do
+  pure (p { iter, unwinds, space = guesses : space }, continue)
 
 -- | Solves pieces by backtracking, stops when the maze is solved, lifespan reached or first choice encountered.
 solve' :: Int -> Bool -> Progress -> IO Progress
 -- solve' _ _ p@Progress{priority} | Map.null priority = pure p
 solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
-solve' lifespan first progressInit@Progress{depth, maze=maze@MMaze{size}} = do
-  let (progress@Progress{components}, continue@Continue{char, choices}) = findContinue progressInit
-
+solve' lifespan first progress@Progress{depth, maze=maze@MMaze{size}, components} = do
+  let continue@Continue{char, choices} = findContinue progress
   let rotations = map (`rotate` char) (pixNDirections (Bit.shiftR choices choicesInvalid))
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
-  progress' <- uncurry solveContinue =<< backtrack . (spaceL %~ (guesses :)) =<< pure progress
+  progress' <- uncurry (solveContinue . popContinue) =<< backtrack False . (spaceL %~ (guesses :)) =<< pure progress
 
   let islandish = length guesses /= 1
   let stop = depth == size - 1 || lifespan == 0 || (islandish && first)
@@ -823,8 +826,10 @@ solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
   p <- islandizeArea =<< componentRecalc True =<< solve' (-1) True p
+  -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
   p <- solve' (-1) False =<< traceIslands p
   -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
+  -- print . ap =<< graphIslands p
 
   let Progress{iter, depth, maze} = p
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
