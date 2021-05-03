@@ -624,11 +624,14 @@ prioritizeIslands directDeltas p@Progress{maze, components = (Components' _)} = 
 {-# INLINE rescoreContinue #-}
 -- | Recalculates the 'Continue's score, less is better (because of 'IntMap.deleteFindMin' in 'findContinue').
 --
--- > score = (x + y + (Bit.shiftL (choices Bit..&. (Bit.shiftL 0b11 choicesCount)) 3) - island * 2^17) * 2^32 + created
+-- > score = (0 - island << 17 + (choices << (15 - choicesCount)) + x + y) << 32 + created
 rescoreContinue :: Int -> Continue -> Continue
-rescoreContinue width c@Continue{cursor, choices, island, created} =
-  c { score = (x + y + (Bit.shiftL (choices Bit..&. (Bit.shiftL 0b11 choicesCount)) 3) - island * 2^17) * 2^32 + created }
-  where (x, y) = mazeCursor width cursor
+rescoreContinue width c@Continue{cursor, choices=choicesBits, island, created} = set scoreL score c
+  where
+    score = (0 - island << 17 + (choices << (15 - choicesCount)) + x + y) << 32 + created
+    choices = choicesBits Bit..&. (0b11 << choicesCount)
+    (<<) = Bit.shiftL
+    (x, y) = mazeCursor width cursor
 
 {-# INLINE prioritizeContinues #-}
 -- | Inserts or reprioritizes 'Continue'
@@ -801,7 +804,7 @@ initProgress m@MMaze{trivials} =
 solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
-  p <- islandize =<< reconnect =<< solve' (-1) True p
+  p <- islandize =<< componentRecalc True =<< solve' (-1) True p
   p <- solve' (-1) False =<< traceIslands p
   -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
 
@@ -811,7 +814,6 @@ solve m = do
   pure maze
   where
     traceIslands = renderImage' "islandize"
-    reconnect = componentRecalc True
 
     -- Progress.components = Components -> Components'
     componentRecalc :: Bool -> Progress -> IO Progress
