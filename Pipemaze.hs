@@ -792,26 +792,26 @@ solveContinue
 -- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
 -- This returns a progress with 'space' that always has an element or the maze isn't solvable
 -- (assuming the algo's correct and the stack hasn't been split for divide and conquer).
-backtrack :: Bool -> Progress -> IO (Progress, Continue)
-backtrack _ Progress{space=[]} = error "unsolvable"
-backtrack _ Progress{space=([]:_), unwinds=[]} = error "unlikely"
+backtrack :: Bool -> Progress -> IO (Maybe (Progress, Continue))
+backtrack _ Progress{space=[]} = pure Nothing
+backtrack _ Progress{space=([]:_), unwinds=[]} = pure Nothing
 backtrack _ p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazePop maze unwind >> backtrack True p { space, unwinds }
 backtrack _popped Progress{space=(((continue, p):guesses):space), unwinds, iter} = do
-  pure (p { iter, unwinds, space = guesses : space }, continue)
+  pure (Just (p { iter, unwinds, space = guesses : space }, continue))
 
 -- | Solves pieces by backtracking, stops when the maze is solved, lifespan reached or first choice encountered.
-solve' :: Int -> Bool -> Progress -> IO Progress
+solve' :: Int -> Bool -> Progress -> IO (Maybe Progress)
 -- solve' _ _ p@Progress{priority} | Map.null priority = pure p
-solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
+solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
 solve' lifespan first progress@Progress{depth, maze=maze@MMaze{size}, components} = do
   let continue@Continue{char, choices} = findContinue progress
   let rotations = map (`rotate` char) (pixNDirections (Bit.shiftR choices choicesInvalid))
   guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
-  progress' <- uncurry (solveContinue . popContinue) =<< backtrack False . (spaceL %~ (guesses :)) =<< pure progress
+  progress' <- traverse (uncurry (solveContinue . popContinue)) =<< backtrack False . (spaceL %~ (guesses :)) =<< pure progress
 
   let islandish = length guesses /= 1
   let stop = depth == size - 1 || lifespan == 0 || (islandish && first)
-  (if stop then pure else solve' (lifespan - 1) first) progress'
+  (if stop then pure else fmap join . traverse (solve' (lifespan - 1) first)) progress'
   where
     removeDead components = if (depth == size - 1) then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
 
@@ -827,10 +827,10 @@ initProgress m@MMaze{trivials} =
 solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
-  p <- islandizeArea =<< componentRecalc True =<< solve' (-1) True p
+  p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (-1) True p)
   -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
   -- previewIslands p
-  p <- solve' (-1) False =<< traceIslands p
+  p <- fmap (maybe p id) . solve' (-1) False =<< traceIslands p
   -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
   -- print . ap =<< graphIslands p
 
