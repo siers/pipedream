@@ -116,9 +116,9 @@ import Text.Printf (printf)
 
 -- graph debug
 import Control.Concurrent (forkIO)
-import Data.Graph.Inductive.Graph (Graph(..))
+import Data.Graph.Inductive.Graph (Graph(..), nmap)
 import Data.Graph.Inductive.PatriciaTree (Gr)
--- import Data.Graph.Inductive.Query.ArtPoint (ap)
+import Data.Graph.Inductive.Query.ArtPoint (ap)
 -- import Data.Graph.Inductive.Query.DFS (isConnected)
 import Data.GraphViz.Attributes.Colors (WeightedColor(..))
 import Data.GraphViz.Attributes.Complete (Color(..), Attribute(..), Shape(..), Overlap(..), EdgeType(..), DPoint(..), createPoint)
@@ -222,6 +222,7 @@ data Island = Island
   , iSize :: Int
   , iConts :: [Continue]
   , iNeighb :: Int -- ^ number of distinct neighbouring components
+  , iAp :: Bool
   } deriving (Generic, Show)
 
 data Progress = Progress
@@ -726,7 +727,7 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       (area, borders) <- flood (fillNextSolved continues) maze cursor
       let iConts = (continues IntMap.!) . (\(x, y) -> x + y * width) <$> (Set.toList borders)
       -- iNeigh <- length . nubOrd <$> traverse (partEquate maze . origin) iConts
-      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts 0 -- iNeigh
+      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts 0 False -- iNeigh
       pure (visited `Set.union` borders, island : islands)
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
@@ -741,11 +742,12 @@ graphIslands p@Progress{maze, components=Components' components} = do
   let
     nodes = map (\island@Island{iId} -> (iId, island)) islands
     connectedIslands island Continue{cursor, origin} =
-      nubOrd . filter (> island) . map embedCursor . filter (/= cursor)
+      nubOrd . filter (/= island) . map embedCursor . filter (/= cursor)
       . foldMap IntSet.toList . (`IntMap.lookup` components) <$> partEquate maze origin
     islandContinues = islands >>= \Island{iId, iConts} -> (iId, ) <$> iConts
     edges = for islandContinues (\(id, continue) -> map ((id, , "")) <$> connectedIslands id continue)
-  mkGraph nodes . join <$> edges
+  graph <- mkGraph nodes . join <$> edges
+  pure (nmap (\i@Island{iId} -> i { iAp = iId `elem` (ap graph) }) graph)
 
 previewIslands :: Progress -> IO Progress
 previewIslands p = (p <$) . forkIO . void $ do
@@ -753,7 +755,7 @@ previewIslands p = (p <$) . forkIO . void $ do
   runGraphvizCanvas Neato graph Xlib
   runGraphvizCommand Neato graph DotOutput "images/graph.dot"
   where
-    params = nonClusteredParams { fmtNode = \(_, Island{iSize}) ->
+    params = nonClusteredParams { fmtNode = \(_, Island{iSize, iAp}) ->
       [ Shape PointShape
       , Width (log (1.1 + (fromIntegral iSize) / 500))
       , NodeSep 0.01
@@ -763,7 +765,7 @@ previewIslands p = (p <$) . forkIO . void $ do
       , Overlap (PrismOverlap (Just 4000))
       , LWidth 1000
       , Splines SplineEdges
-      , Color [WC (RGB 252 160 18) Nothing]
+      , Color [WC (if iAp then RGB 66 135 245 else RGB 252 160 18) Nothing]
       ]
     }
 
@@ -827,6 +829,7 @@ solve m = do
   p <- initProgress m
   p <- islandizeArea =<< componentRecalc True =<< solve' (-1) True p
   -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
+  -- previewIslands p
   p <- solve' (-1) False =<< traceIslands p
   -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
   -- print . ap =<< graphIslands p
