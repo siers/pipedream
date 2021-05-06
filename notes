@@ -174,38 +174,56 @@ Choice count for maze 4-1 in solve' with "print (length rotations)"
 • update with better scores through continues, join origins
 • bring back Continue{created}, because we don't need guessable scores if we have `continues'
 
+2021-03-18-18:09:33
+data Continue = Continue { .. + islandWeight :: Int = 0, island :: Boolean = False }
+data Piece = Piece { .. + island :: Boolean = Continue.island }
+
 2021-03-13-13:35:17 - 2021-04-18-19:59:38
-✔ solve whole islands (Continue.islandWeight) on 6 and continue with continuations of islands
-✗ fillNextSolved with mutable sets (no such thing)
-✔ make components available as Map PartId (Set Cursor)
+• main algo updates:
+  ✔ solve whole islands (Continue.islandWeight) on 6 and continue with continuations of islands
+  ✔ make components available as Map PartId (Set Cursor)
+  ✗ fillNextSolved with mutable sets (no such thing)
 • simple fixes
   ✔ fix recursion guard
   ✔ lvl in MMaze
 • simple optimizations for later:
   ✔ priority :: Data.IntMap.Strict
   ✔ prioritize all choices = 0 from the top
-  • add all init continues with choices = 0 (crosses and edge pieces)
-  • continues :: Data.IntMap.Strict Int Continue, problems: deltas must be precomputed (Wall, Cursor)^4) or just bit-packed directions
-  • cache next (bit-packed directions, .&. when reprioritizing)
-    • make choices :: Int, bit-packed as choices + enabled + set
-    • see if manual check+update is better than alterF
+  ✔ add all init continues with choices = 0 (crosses and edge pieces)
+  ✔ continues :: Data.IntMap.Strict Int Continue, problems: deltas must be precomputed (Wall, Cursor)^4) or just bit-packed directions
+  ✔ cache next (bit-packed directions, .&. when reprioritizing)
+    ✔ make choices :: Int, bit-packed as choices + enabled + set
     ✔ update in continues, make priority :: Map PartId Cursor
-  • continues: use choice count for space
+    ✗ see if manual check+update is better than alterF
+  ✔ continues: use choice count for space
   • unboxed/storable vectors
-• visual upgrades:
-  • new tracing mode after islandize
-  • 3x3 border for image for easier edge viewing
+• visuals
+  ✔ 3x3 border for image for easier edge viewing
+  ✔ create a hackage page
+  ✔ new tracing mode after islandize
+  ✗ B&W with continues only (just higher intensity/saturation is fine :)
   • pick colors from pallette
   • create animation with ffmpeg (use threads for actual drawing, but don't forget to wait for them to finish)
-  • create a hackage page
-  ✗ B&W with continues only (just higher intensity/saturation is fine :)
-• main algo updates:
-  • compute island triviality
-  • keep multiple progresses ordered by breadth count (split :: Int + 1), have more breadth
 
-2021-03-18-18:09:33
-data Continue = Continue { .. + islandWeight :: Int = 0, island :: Boolean = False }
-data Piece = Piece { .. + island :: Boolean = Continue.island }
+2021-05-04-11:36:03
+• main algo updates:
+  ✔ backtracking with maybe
+  • add data Constraints = ConstrNone | ConstrIsland | ConstrIsland1
+  • recursion guard before, not after solveContinue step (and works with constraints)
+  • compute all solutions of an island with iterateMaybeM (throw out last solution, to retrigger backtracking, add min depth constraint or cut space)
+  • recheck island size scoring with image outputs
+  • keep multiple progresses ordered by breadth count (split :: Int + 1), have more breadth
+• simple optimizations
+  • unboxed/storable vectors
+  • no space/unwinds, if deterministic
+  • inlinable for solveContinue/backtrack
+  • fix prioritizeContinues
+  • use choices in pieceDead
+• visuals
+  • pick colors from pallette
+  • create animation with ffmpeg (use threads for actual drawing, but don't forget to wait for them to finish)
+• prikolīgi
+  • Data.Aeson Progress instances, just to see how it looks after a few iterations
 
 -      let satu = if solved then 0.15 else (if isJust cont then 1 else 0)
 -      let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
