@@ -92,7 +92,7 @@ import Data.IntSet (IntSet)
 import Data.List (elemIndex)
 import Data.List.Extra (nubOrd)
 import Data.Map.Strict (Map, (!))
-import Data.Maybe (fromMaybe, fromJust, isJust)
+import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
 import Data.Monoid (Sum(..))
 import Data.Set (Set)
 import Data.Traversable (for)
@@ -446,7 +446,7 @@ traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
         tracer 1 FREQ_DEF False
         when islandish (void (renderImage' ("trace") progress))
       | iter `mod` freq == 0 && mode == 5 =
-        tracer 4 freq ((> 0) . island $ findContinue progress)
+        tracer 4 freq (maybe False ((> 0) . island) $ findContinue progress)
       | True = pure ()
 
     perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
@@ -604,9 +604,9 @@ deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initCho
   let invalids = filter (\r -> pointed /= (Bit.testBit (rotate r pipe) dir)) validRot
   let choices' :: Int = foldr (\d s -> s - Bit.bit choicesCount + Bit.bit (choicesInvalid + d)) initChoices' invalids
   let solveds = Bit.bit (dir + choicesSolveds)
-  let require = fromEnum pointed `Bit.shiftL` (dir + choicesRequire)
+  -- let require = fromEnum pointed `Bit.shiftL` (dir + choicesRequire) -- not used
 
-  Continue c pipe origin' 0 id island' area (choices' Bit..|. require Bit..|. solveds)
+  Continue c pipe origin' 0 id island' area (choices' Bit..|. solveds)
 
 {-# INLINE prioritizeDeltas #-}
 -- | Calls 'prioritizeContinues' on nearby pieces (delta = 1)
@@ -665,17 +665,17 @@ prioritizeContinues progress@Progress{maze=MMaze{width}, priority, continues, co
           else (exists { choices }, id)
 
 {-# INLINE pieceDead #-}
--- | Check if 'Continue' is about to close its component.
-pieceDead :: MMaze -> Components -> (Continue, Priority) -> IO Bool
-pieceDead maze@MMaze{width=w} components (Continue{cursor=cur, char=this}, _) = do
+-- | Check if 'Continue' is about to become separated from the rest of the graph.
+pieceDead :: MMaze -> Components -> Fursor -> Pix -> Choices -> IO Bool
+pieceDead maze components cur pix choices = do
   thisPart <- partEquate maze . partId =<< mazeRead maze cur
-  (compAlive thisPart components &&) <$> stuck
-  where stuck = allM (fmap solved . mazeRead maze . mazeFDelta w cur) (pixDirections this)
+  pure (compAlive thisPart components && stuck)
+  where stuck = 0 == ((0b1111 Bit..&. pix) Bit..&. Bit.complement (fromIntegral choices))
 
 -- | Pops `priority` by `score`, deletes from `continues`.
 {-# INLINE findContinue #-}
-findContinue :: Progress -> Continue
-findContinue Progress{priority, continues} = continues IntMap.! snd (IntMap.findMin priority)
+findContinue :: Progress -> Maybe Continue
+findContinue Progress{priority, continues} = snd (IntMap.findMin priority) `IntMap.lookup` continues
 
 popContinue :: Progress -> Progress
 popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = IntMap.delete cursor c }
@@ -683,7 +683,7 @@ popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = Int
 
 {--- Island computations ---}
 
--- | The generic /pain/ of the 'flood' fill.
+-- | The generic /paint/ of the 'flood' fill.
 type FillNext s = MMaze -> Cursor -> Piece -> [(Piece, Direction)] -> StateT s IO [Cursor]
 
 -- | Four-way flood fill with 'FillNext' as the "paint". The initial piece is assumed to be valid FillNext.
@@ -801,19 +801,25 @@ backtrack _popped Progress{space=(((continue, p):guesses):space), unwinds, iter}
 
 -- | Solves pieces by backtracking, stops when the maze is solved, lifespan reached or first choice encountered.
 solve' :: Int -> Bool -> Progress -> IO (Maybe Progress)
--- solve' _ _ p@Progress{priority} | Map.null priority = pure p
+-- solve' _ _ p@Progress{priority} | Map.null priority = pure Nothing
 solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
 solve' lifespan first progress@Progress{depth, maze=maze@MMaze{size}, components} = do
-  let continue@Continue{char, choices} = findContinue progress
-  let rotations = map (`rotate` char) (pixNDirections (Bit.shiftR choices choicesInvalid))
-  guesses <- removeDead components . map ((, progress) . ($ continue) . set charL) $ rotations
-  progress' <- traverse (uncurry (solveContinue . popContinue)) =<< backtrack False . (spaceL %~ (guesses :)) =<< pure progress
+  guesses <- foldMap guesses (maybeToList (findContinue progress))
+  progress' <- backtrack False . (spaceL %~ (guesses :)) =<< pure progress
+  progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
 
   let islandish = length guesses /= 1
   let stop = depth == size - 1 || lifespan == 0 || (islandish && first)
   (if stop then pure else fmap join . traverse (solve' (lifespan - 1) first)) progress'
   where
-    removeDead components = if (depth == size - 1) then pure else filterM (fmap not . pieceDead maze components . (_2 %~ priority))
+    guesses continue@Continue{cursor, char, choices} = do
+      let rotations = pixNDirections (Bit.shiftR choices choicesInvalid)
+      rotations <- filterDisconnected (map (\r -> (cursor, rotate r char, choices)) rotations)
+      pure (map (\(_, pipe, _) -> (set charL pipe continue, progress)) rotations)
+
+    filterDisconnected = filterM $ \(cur, pix, choices) -> do
+      disconnected <- pieceDead maze components cur pix choices
+      pure ((depth == size - 1) || not disconnected)
 
 initProgress :: MMaze -> IO Progress
 initProgress m@MMaze{trivials} =
