@@ -83,7 +83,7 @@ suffixLNamer = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase)
 import Numeric (showIntAtBase)
 import Data.Char (intToDigit)
 :l Pipemaze
-p <- initProgress =<< parse =<< readFile "samples/1"
+p <- initProgress =<< parse =<< readFile "samples/3"
 (Map.! (0, 1)) $ continues p
 showBin . flip Bit.shiftR choicesInvalid . initChoices . (V.! 8) <$> V.freeze (board (maze p))
 
@@ -91,3 +91,53 @@ flip Bit.shiftR choicesCount  . choices . snd <$> Map.toList (continues p)
 showBin = flip (showIntAtBase 2 intToDigit) ""
 -- V.map (showBin . flip Bit.shiftR choicesInvalid . initChoices) <$> V.freeze (board (maze p))
 showBin . flip Bit.shiftR choicesInvalid . initChoices . V.head <$> V.freeze (board (maze p))
+
+-- 2021-05-06-21:33:38
+
+p <- initProgress =<< parse =<< readFile "samples/3"
+p <- fmap fromJust (solve' (-1) True p)
+render . maze . fromJust =<< solve' (-1) False =<< (set mazeL <$> mazeClone (maze p) <*> pure p)
+
+import Control.Concurrent (threadDelay)
+:l Pipemaze
+-- progressClone :: Progress -> IO Progress
+progressClone = mazeL (boardL MV.clone) :: Progress -> IO Progress
+progressRender = (\p -> putStrLn "\x1b[H\x1b[2K" >> render (maze p))
+progressSolved Progress{maze=MMaze{width, height}, depth} = width * height == depth
+showSpace = filter (not . null . fst) . flip zip [0..] . fmap (fmap fst) . space
+p_ <- initProgress =<< parse =<< readFile "samples/3"
+p_ <- fmap fromJust (solve' (-1) True p_)
+ps <- iterateMaybeM 100 (\p -> fmap (mfilter progressSolved) . solve' (2500 * 10) False =<< progressClone p) p_
+traverse_ ((>> threadDelay 1000000) . progressRender ) ps
+
+-- traverse print . fmap (take 2 . showSpace) $ ps
+-- length . nubOrd . fmap (filter (not . null . fst) . flip zip [0..] . fmap (fmap fst) . space) $ ps
+
+s n p = foldrM id p . replicate n $ (\p -> fromJust <$> solve' 300000 False p)
+ss n p = s n =<< progressClone p
+progressRender =<< ss 3 p_
+
+s n p = foldrM id p . replicate n $ (\p -> fmap fromJust . solve' 300000 False =<< progressClone p)
+ss n p = s n =<< progressClone p
+progressRender =<< ss 3 p_
+
+-- 2021-05-09-11:05:00
+
+-- bug: backtracking doesn't reuse previous' solve's maze
+progressRender =<< fmap fromJust . solve' 5000 False =<< progressClone =<< pure p_
+progressRender =<< fmap fromJust . solve' 5000 False =<< progressClone =<< fmap fromJust . solve' 5000 False =<< progressClone =<< pure p_
+progressRender =<< fmap fromJust . solve' 5000 False =<< (mazeL (boardL (\b -> MV.clone b)) =<< fmap fromJust . solve' 5000 False =<< progressClone =<< pure p_)
+progressRender =<< fmap fromJust . solve' 5000 False =<< mazeL (boardL (\b -> MV.clone b >> pure b)) =<< fmap fromJust . solve' 5000 False =<< progressClone =<< pure p_
+p <- fmap fromJust . solve' 25000 False =<< progressClone =<< pure p_
+rs = set spaceL []
+(rs p ==) . rs <$> progressClone p
+
+fmap (take 2 . showSpace . fromJust) . solve' (-1) False =<< fmap fromJust . solve' (-1) False =<< fmap Just (progressClone p_)
+fmap depth . fmap fromJust . solve' (-1) False =<< progressClone p_
+fmap depth . fmap fromJust . solve' (-1) False =<< fmap fromJust . solve' (-1) False =<< progressClone p_
+
+λ: f = pure . fmap (+1) . mfilter (\a -> mod a 11 /= 3) . Just
+λ: iterateMaybeM 1000 f 4
+[5,6,7,8,9,10,11,12,13,14]
+λ: iterateMaybeM 1000 f 7
+[8,9,10,11,12,13,14]

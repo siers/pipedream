@@ -1,4 +1,4 @@
-{-# LANGUAGE TupleSections, NamedFieldPuns, BinaryLiterals, TemplateHaskell, CPP, ScopedTypeVariables, NumericUnderscores #-}
+{-# LANGUAGE TupleSections, NamedFieldPuns, BinaryLiterals, TemplateHaskell, CPP, ScopedTypeVariables, NumericUnderscores, FlexibleInstances #-}
 
 {-# LANGUAGE StrictData, BangPatterns #-}
 {-# OPTIONS_GHC -O #-}
@@ -80,7 +80,7 @@ import Control.Lens.TH (DefName(..), lensRules)
 import Control.Lens ((&), (%~), set, _2)
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad (join, filterM, void, when, mfilter)
+import Control.Monad (join, filterM, void, when, mfilter, liftM)
 import Control.Monad.Primitive (RealWorld)
 import Control.Monad.Trans.State.Strict (StateT(..))
 import Data.Bifunctor (bimap)
@@ -159,6 +159,11 @@ type Cursor = (Int, Int)
 -- | Flat cursors, for @f :: FCursor, (x, y) :: Cursor, f = x + y * width@. Through `Choices`, bound checking is cached, so deltas are just ±1 or ±width.
 type Fursor = Int
 
+-- | unlawful instance
+instance Eq (MVector RealWorld Piece) where _ == _ = True
+-- | unlawful instance
+instance Ord (MVector RealWorld Piece) where _ <= _ = True
+
 -- | Mutable maze operated on by functions in section /"Maze operations"/
 data MMaze = MMaze
   { board :: MVector RealWorld Piece -- ^ flat MVector with implied 2d structure via 'Cursor'/'Fursor' + index computations
@@ -169,7 +174,7 @@ data MMaze = MMaze
   , level :: Int
   , trivials :: [Fursor] -- ^ cursors of the edge and @X@ pieces which have only one valid rotation
   , mazeId :: String -- ^ 'board's data scrambled into a 4-byte hexadecimal field
-  }
+  } deriving (Eq, Ord, Generic)
 
 data Piece = Piece
   { pipe :: Pix
@@ -178,7 +183,7 @@ data Piece = Piece
   , connected :: Bool -- ^ connected when pointed to by a 'solved' piece
   , wasIsland :: Bool -- ^ was this solved by an island 'Continue'?
   , initChoices :: Choices
-  } deriving (Generic, Show)
+  } deriving (Show, Eq, Ord, Generic)
 
 -- | 'Choices' is bit-packed info related to the valid rotations of a picce.
 -- In MSB order: (valid) rotation count 2b, invalid rotation directions 4b, solved requirements 4b, solved neighbours 4b
@@ -195,7 +200,7 @@ data Continue = Continue
   , island :: Int -- ^ \> 0 if island
   , area :: Int -- ^ island area, 0 if not an island
   , choices :: Choices
-  } deriving (Generic, Show)
+  } deriving (Show, Eq, Ord, Generic)
 
 -- | 'PartId' distinguishes the graph component by their smallest known 'Cursor' by its 'Ord' (unique),
 -- so it is the same as its cursor initially. They're marked in 'origin' ahead of 'solved's.
@@ -211,7 +216,7 @@ type Continues = IntMap Continue
 data Components
   = Components (IntMap Int) -- ^ marginally faster, but less info
   | Components' (IntMap IntSet)
-  deriving (Show, Generic)
+  deriving (Show, Eq, Ord, Generic)
 
 -- | For mutable backtracking
 type Unwind = (Fursor, Piece)
@@ -223,7 +228,7 @@ data Island = Island
   , iConts :: [Continue]
   , iNeighb :: Int -- ^ number of distinct neighbouring components
   , iAp :: Bool
-  } deriving (Generic, Show)
+  } deriving (Show, Eq, Ord, Generic)
 
 data Progress = Progress
   { iter :: Int -- ^ the total number of backtracking iterations (incl. failed ones)
@@ -234,7 +239,7 @@ data Progress = Progress
   , space :: [[(Continue, Progress)]] -- ^ unexplored solution stack, might help with parallelization; item per choice, per cursor. must be non-empty
   , unwinds :: [[Unwind]] -- ^ backtracking's "rewind"; an item per a solve. pop when (last 'space' == [])
   , maze :: MMaze
-  }
+  } deriving (Eq, Ord, Generic)
 
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''MMaze
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Piece
@@ -256,6 +261,14 @@ instance ToJSON Piece
 instance ToJSON Continue
 instance ToJSON Components
 instance ToJSON Island
+
+-- | From: https://hackage.haskell.org/package/monad-extras-0.6.0/docs/src/Control-Monad-Extra.html#iterateMaybeM
+-- | Monadic equivalent to 'iterate', which uses Maybe to know when to
+--   terminate.
+iterateMaybeM :: Monad m => Int -> (a -> m (Maybe a)) -> a -> m [a]
+iterateMaybeM 0 _ _ = pure []
+iterateMaybeM n f x =
+  maybe (return []) (\x' -> (x':) `liftM` iterateMaybeM (n - 1) f x') =<< f x
 
 {--- MMaze and Matrix operations ---}
 
@@ -310,7 +323,7 @@ mazeModify :: MMaze -> (Piece -> Piece) -> Fursor -> IO ()
 mazeModify MMaze{board} f fc = MV.unsafeModify board f fc
 
 mazeClone :: MMaze -> IO MMaze
-mazeClone m@MMaze{board} = (\board -> m { board }) <$> MV.clone board
+mazeClone = boardL MV.clone
 
 {-# INLINE mazeSolve #-}
 mazeSolve :: MMaze -> Continue -> IO Unwind
@@ -675,7 +688,7 @@ pieceDead maze components cur pix choices = do
 -- | Pops `priority` by `score`, deletes from `continues`.
 {-# INLINE findContinue #-}
 findContinue :: Progress -> Maybe Continue
-findContinue Progress{priority, continues} = snd (IntMap.findMin priority) `IntMap.lookup` continues
+findContinue Progress{priority, continues} = (snd <$> IntMap.lookupMin priority) >>= (`IntMap.lookup` continues)
 
 popContinue :: Progress -> Progress
 popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = IntMap.delete cursor c }
@@ -796,13 +809,13 @@ backtrack :: Bool -> Progress -> IO (Maybe (Progress, Continue))
 backtrack _ Progress{space=[]} = pure Nothing
 backtrack _ Progress{space=([]:_), unwinds=[]} = pure Nothing
 backtrack _ p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazePop maze unwind >> backtrack True p { space, unwinds }
-backtrack _popped Progress{space=(((continue, p):guesses):space), unwinds, iter} = do
-  pure (Just (p { iter, unwinds, space = guesses : space }, continue))
+backtrack _popped Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} = do
+  pure (Just (p { maze, iter, unwinds, space = guesses : space }, continue))
 
 -- | Solves pieces by backtracking, stops when the maze is solved, lifespan reached or first choice encountered.
 solve' :: Int -> Bool -> Progress -> IO (Maybe Progress)
 -- solve' _ _ p@Progress{priority} | Map.null priority = pure Nothing
-solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
+-- solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
 solve' lifespan first progress@Progress{depth, maze=maze@MMaze{size}, components} = do
   guesses <- foldMap guesses (maybeToList (findContinue progress))
   progress' <- backtrack False . (spaceL %~ (guesses :)) =<< pure progress
@@ -836,6 +849,7 @@ solve m = do
   p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (-1) True p)
   -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
   -- previewIslands p
+  -- iterateMaybeM (solve' (-1) False) p
   p <- fmap (maybe p id) . solve' (-1) False =<< traceIslands p
   -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
   -- print . ap =<< graphIslands p
