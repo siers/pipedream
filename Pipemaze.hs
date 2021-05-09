@@ -221,15 +221,6 @@ data Components
 -- | For mutable backtracking
 type Unwind = (Fursor, Piece)
 
--- | Island is the patch of unsolved pieces surrounded by solved pieces, computed by `flood` in `islands`.
-data Island = Island
-  { iId :: Int
-  , iSize :: Int
-  , iConts :: [Continue]
-  , iNeighb :: Int -- ^ number of distinct neighbouring components
-  , iAp :: Bool
-  } deriving (Show, Eq, Ord, Generic)
-
 data Progress = Progress
   { iter :: Int -- ^ the total number of backtracking iterations (incl. failed ones)
   , depth :: Int -- ^ number of solves, so also the length of unwinds/space
@@ -241,10 +232,27 @@ data Progress = Progress
   , maze :: MMaze
   } deriving (Eq, Ord, Generic)
 
+data Constraints = Constraints
+  { cLifespan :: Int
+  , cDeterministic :: Bool
+  , cBounds :: Maybe (Set Fursor)
+  } deriving (Show, Eq, Ord, Generic)
+
+-- | Island is the patch of unsolved pieces surrounded by solved pieces, computed by `flood` in `islands`.
+data Island = Island
+  { iId :: Int
+  , iSize :: Int
+  , iConts :: [Continue]
+  , iBounds :: Set Fursor
+  -- , iNeighb :: Int -- ^ number of distinct neighbouring components
+  , iAp :: Bool
+  } deriving (Show, Eq, Ord, Generic)
+
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''MMaze
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Piece
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Continue
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Progress
+makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Constraints
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Island
 
 -- | unlawful
@@ -734,13 +742,16 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       (\acc -> foldrM acc (Set.empty, []) continues) $ \cursor acc@(visited, _) ->
         if (cursor `Set.member` visited) then pure acc else perIsland cursor acc
 
+    fursorEmbed = (\(x, y) -> x + y * width)
+
     -- border = island's border by continues
     perIsland :: Cursor -> (Set Cursor, [Island]) -> IO (Set Cursor, [Island])
     perIsland cursor (visited, islands) = do
       (area, borders) <- flood (fillNextSolved continues) maze cursor
-      let iConts = (continues IntMap.!) . (\(x, y) -> x + y * width) <$> (Set.toList borders)
+      let iConts = (continues IntMap.!) . fursorEmbed <$> (Set.toList borders)
       -- iNeigh <- length . nubOrd <$> traverse (partEquate maze . origin) iConts
-      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts 0 False -- iNeigh
+      let iBounds = Set.map fursorEmbed area
+      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts iBounds False
       pure (visited `Set.union` borders, island : islands)
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
@@ -813,18 +824,19 @@ backtrack _popped Progress{space=(((continue, p):guesses):space), maze, unwinds,
   pure (Just (p { maze, iter, unwinds, space = guesses : space }, continue))
 
 -- | Solves pieces by backtracking, stops when the maze is solved, lifespan reached or first choice encountered.
-solve' :: Int -> Bool -> Progress -> IO (Maybe Progress)
--- solve' _ _ p@Progress{priority} | Map.null priority = pure Nothing
--- solve' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
-solve' lifespan first progress@Progress{depth, maze=maze@MMaze{size}, components} = do
+solve' :: Constraints -> Progress -> IO (Maybe Progress)
+solve' _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
+solve' cstrs@(Constraints life det _) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
   guesses <- foldMap guesses (maybeToList (findContinue progress))
   progress' <- backtrack False . (spaceL %~ (guesses :)) =<< pure progress
   progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
 
-  let islandish = length guesses /= 1
-  let stop = depth == size - 1 || lifespan == 0 || (islandish && first)
-  (if stop then pure else fmap join . traverse (solve' (lifespan - 1) first)) progress'
+  let stop = depth == size - 1 || life == 0 || (det && (length guesses /= 1))
+  next stop progress'
   where
+    next True = pure
+    next False = fmap join . traverse (solve' ((cLifespanL %~ (subtract 1)) cstrs))
+
     guesses continue@Continue{cursor, char, choices} = do
       let rotations = pixNDirections (Bit.shiftR choices choicesInvalid)
       rotations <- filterDisconnected (map (\r -> (cursor, rotate r char, choices)) rotations)
@@ -846,11 +858,11 @@ initProgress m@MMaze{trivials} =
 solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
-  p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (-1) True p)
+  p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (Constraints (-1) True Nothing) p)
   -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
   -- previewIslands p
   -- iterateMaybeM (solve' (-1) False) p
-  p <- fmap (maybe p id) . solve' (-1) False =<< traceIslands p
+  p <- fmap (maybe p id) . solve' (Constraints (-1) False Nothing) =<< traceIslands p
   -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
   -- print . ap =<< graphIslands p
 
