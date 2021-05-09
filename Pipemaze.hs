@@ -90,7 +90,7 @@ import Data.Function (on)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
 import Data.List (elemIndex)
-import Data.List.Extra (nubOrd)
+import Data.List.Extra (nubOrd, groupSortOn)
 import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
 import Data.Monoid (Sum(..))
@@ -198,7 +198,7 @@ data Continue = Continue
   , score :: Int -- ^ see 'rescoreContinue'
   , created :: Int -- ^ any unique id to make score order total ('Ord' requirement), taken from 'iter'
   , island :: Int -- ^ \> 0 if island
-  , area :: Int -- ^ island area, 0 if not an island
+  , area :: Int -- ^ island score, 0 if not an island
   , choices :: Choices
   } deriving (Show, Eq, Ord, Generic)
 
@@ -244,7 +244,7 @@ data Island = Island
   , iSize :: Int
   , iConts :: [Continue]
   , iBounds :: Set Fursor
-  -- , iNeighb :: Int -- ^ number of distinct neighbouring components
+  , iChoices :: Int -- ^ number of distinct neighbouring components
   , iAp :: Bool
   } deriving (Show, Eq, Ord, Generic)
 
@@ -258,7 +258,7 @@ makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (+
 -- | unlawful
 instance Show Progress where
   show Progress{iter, priority} =
-    "Progress" ++ show (iter, length priority)
+    "Progress" ++ show ('@', iter, 'c', length priority)
 
 -- | unlawful
 instance Show MMaze where
@@ -467,7 +467,7 @@ traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
         tracer 1 FREQ_DEF False
         when islandish (void (renderImage' ("trace") progress))
       | iter `mod` freq == 0 && mode == 5 =
-        tracer 4 freq (maybe False ((> 0) . island) $ findContinue progress)
+        tracer 4 freq (maybe False ((> 0) . island) $ findContinue Nothing progress)
       | True = pure ()
 
     perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
@@ -610,6 +610,10 @@ compConnected :: PartId -> Components -> [Fursor]
 compConnected k (Components' c) = foldMap IntSet.toList (IntMap.lookup k c)
 compConnected _ _ = []
 
+compCounts :: Components -> IntMap Int
+compCounts (Components c) = c
+compCounts (Components' c) = IntMap.map IntSet.size c
+
 {--- Solver bits: continues ---}
 
 {-# INLINE deltaContinue #-}
@@ -695,8 +699,9 @@ pieceDead maze components cur pix choices = do
 
 -- | Pops `priority` by `score`, deletes from `continues`.
 {-# INLINE findContinue #-}
-findContinue :: Progress -> Maybe Continue
-findContinue Progress{priority, continues} = (snd <$> IntMap.lookupMin priority) >>= (`IntMap.lookup` continues)
+findContinue :: Maybe (Set Fursor) -> Progress -> Maybe Continue
+findContinue bounds Progress{priority, continues} =
+  mfilter (\c -> all (Set.member c) bounds) (snd <$> IntMap.lookupMin priority) >>= (`IntMap.lookup` continues)
 
 popContinue :: Progress -> Progress
 popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = IntMap.delete cursor c }
@@ -726,12 +731,23 @@ islandizeFirst p = do
 
 islandizeArea :: Progress -> IO Progress
 islandizeArea p = do -- (islandizeFirst =<<) $
-  (reduce p . fst <$> islands p <*>) . pure $ \_i@Island{iConts} p ->
+  islands <- traverse (islandChoices p) . fst =<< (islands p)
+  pure . reduce p islands $ \_i@Island{iConts, iChoices} p ->
     reduce p iConts $ \Continue{cursor} p ->
-      prioritizeContinues p cursor (set islandL 1 . fromJust) -- . set areaL (area _i) -- makes ratio significantly worse
+      prioritizeContinues p cursor (set areaL iChoices . set islandL 1 . fromJust)
   where
-    -- area Island{iSize, iConts, iNeighb} = 0 -- no dumb
     reduce a l f = foldr f a l
+
+islandChoices :: Progress -> Island -> IO Island
+islandChoices p i@Island{iBounds} = do
+  let constraints = Constraints 100 False (Just iBounds)
+  solutions <- iterateMaybeM 25000 (solve' constraints) =<< islandProgress i
+  pure (i { iChoices = length $ groupSortOn (compCounts . components) solutions})
+  where
+    islandProgress :: Island -> IO Progress
+    islandProgress Island{iConts=(Continue{cursor}:_)} =
+      mazeL (boardL MV.clone) (prioritizeContinues ip cursor (set islandL 2 . fromJust))
+      where ip = p { space = [], unwinds = [] }
 
 islands :: Progress -> IO ([Island], IntMap Int)
 islands Progress{maze=maze@MMaze{width}, continues} = do
@@ -751,13 +767,15 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       let iConts = (continues IntMap.!) . fursorEmbed <$> (Set.toList borders)
       -- iNeigh <- length . nubOrd <$> traverse (partEquate maze . origin) iConts
       let iBounds = Set.map fursorEmbed area
-      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts iBounds False
+      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts iBounds 0 False
       pure (visited `Set.union` borders, island : islands)
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
     fillNextSolved continues _ cur@(x, y) _ deltasWall = do
       when ((x + y * width) `IntMap.member` continues) $ State.modify (Set.insert cur)
       pure . map (mazeDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
+
+{--- Island potential connectivity graphing ---}
 
 graphIslands :: Progress -> IO (Gr Island String)
 graphIslands Progress{components=Components _} = pure (mkGraph [] [])
@@ -823,15 +841,17 @@ backtrack _ p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazeP
 backtrack _popped Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} = do
   pure (Just (p { maze, iter, unwinds, space = guesses : space }, continue))
 
--- | Solves pieces by backtracking, stops when the maze is solved, lifespan reached or first choice encountered.
+-- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
 solve' :: Constraints -> Progress -> IO (Maybe Progress)
 solve' _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
-solve' cstrs@(Constraints life det _) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
-  guesses <- foldMap guesses (maybeToList (findContinue progress))
+solve' cstrs@(Constraints life det bounds) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
+  -- print (findContinue progress)
+  guesses <- foldMap guesses (maybeToList (findContinue bounds progress))
   progress' <- backtrack False . (spaceL %~ (guesses :)) =<< pure progress
   progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
 
-  let stop = depth == size - 1 || life == 0 || (det && (length guesses /= 1))
+  let bounded = not (null (progress' >>= findContinue bounds))
+  let stop = depth == size - 1 || life == 0 || (det && (length guesses /= 1)) || not bounded
   next stop progress'
   where
     next True = pure
@@ -859,6 +879,7 @@ solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
   p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (Constraints (-1) True Nothing) p)
+  -- traverse print =<< (islandsSolutions p . sortOn (iSize) . fst =<< islands p)
   -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
   -- previewIslands p
   -- iterateMaybeM (solve' (-1) False) p

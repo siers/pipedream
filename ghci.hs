@@ -103,12 +103,28 @@ import Control.Concurrent (threadDelay)
 -- progressClone :: Progress -> IO Progress
 progressClone = mazeL (boardL MV.clone) :: Progress -> IO Progress
 progressRender = (\p -> putStrLn "\x1b[H\x1b[2K" >> render (maze p))
-progressSolved Progress{maze=MMaze{width, height}, depth} = width * height == depth
 showSpace = filter (not . null . fst) . flip zip [0..] . fmap (fmap fst) . space
+deterministic = Constraints (-1) True Nothing
 p_ <- initProgress =<< parse =<< readFile "samples/3"
-p_ <- fmap fromJust (solve' (-1) True p_)
+p_ <- fmap fromJust (solve' deterministic p_)
+-- progressRender p_
+-- islandsSolutions p_ . fst =<< islands p_
+-- islandsSolutions p_ . sortOn (iSize) . fst =<< islands p_
+-- traverse print . map (_2 %~ (map fst)) =<< (islandsSolutions p_ . sortOn (iSize) . fst =<< islands p_)
+traverse print =<< (islandsSolutions p_ . sortOn (iSize) . fst =<< islands p_)
+
+-- [(3,1),(4,2),(4,2),(8,1),(8,2),(9,2),(17,1),(24,1),(38,2),(82,8),(83,2),(294,72)]
+-- iSize . head . sortOn (iSize) . fst <$> islands p_
+islandsSolutions p_ . take 1 . sortOn (iSize) . fst =<< islands p_
+
 ps <- iterateMaybeM 100 (\p -> fmap (mfilter progressSolved) . solve' (2500 * 10) False =<< progressClone p) p_
 traverse_ ((>> threadDelay 1000000) . progressRender ) ps
+
+ic = Constraints 1000 False (Just iBounds)
+ip i p = progressClone =<< prioritizeContinues p { space = [], unwinds = [], priority = IntMap.empty, continues = IntMap.empty }
+islandSolutions ic c p = iterateMaybeM 100 (fmap (mfilter progressSolved) . solve' (ic i)) =<< ip i p
+map (length . iBounds) . fst <$> islands p_
+traverse (fmap length . solutions) p_ . fst =<< islands p_
 
 -- traverse print . fmap (take 2 . showSpace) $ ps
 -- length . nubOrd . fmap (filter (not . null . fst) . flip zip [0..] . fmap (fmap fst) . space) $ ps
