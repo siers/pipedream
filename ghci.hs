@@ -157,3 +157,13 @@ fmap depth . fmap fromJust . solve' (-1) False =<< fmap fromJust . solve' (-1) F
 [5,6,7,8,9,10,11,12,13,14]
 λ: iterateMaybeM 1000 f 7
 [8,9,10,11,12,13,14]
+
+-- 2021-05-17-19:08:37
+
+:l Pipemaze
+showSpace = filter (not . null . fst) . flip zip [0..] . fmap (fmap fst) . space
+progressRender = (\p -> putStrLn "\x1b[H\x1b[2K" >> render (maze p))
+progressClone = mazeL (boardL MV.clone) :: Progress -> IO Progress
+p_ <- initProgress =<< parse =<< readFile "samples/3"
+p_ <- fmap fromJust (solve' deterministic p_)
+fmap fromJust (solve' (Constraints 1 False Nothing) =<< progressClone p_)

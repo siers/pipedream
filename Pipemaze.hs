@@ -238,6 +238,9 @@ data Constraints = Constraints
   , cBounds :: Maybe (Set Fursor)
   } deriving (Show, Eq, Ord, Generic)
 
+unconstrained = Constraints (-1) False Nothing
+deterministic = Constraints (-1) True Nothing
+
 -- | Island is the patch of unsolved pieces surrounded by solved pieces, computed by `flood` in `islands`.
 data Island = Island
   { iId :: Int
@@ -455,7 +458,7 @@ islandCounts Progress{continues} = bimap getSum getSum . foldMap count $ IntMap.
 traceBoard :: Continue -> Progress -> IO Progress
 traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
   let (mode, freq) = (TRACE :: Int, FREQ :: Int)
-  tracer mode freq False
+  tracer mode freq True
   pure progress
   where
     tracer :: Int -> Int -> Bool -> IO ()
@@ -467,7 +470,7 @@ traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
         tracer 1 FREQ_DEF False
         when islandish (void (renderImage' ("trace") progress))
       | iter `mod` freq == 0 && mode == 5 =
-        tracer 4 freq (maybe False ((> 0) . island) $ findContinue Nothing progress)
+        tracer 4 freq (maybe False ((> 0) . island) $ findContinue unconstrained progress)
       | True = pure ()
 
     perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
@@ -699,9 +702,16 @@ pieceDead maze components cur pix choices = do
 
 -- | Pops `priority` by `score`, deletes from `continues`.
 {-# INLINE findContinue #-}
-findContinue :: Maybe (Set Fursor) -> Progress -> Maybe Continue
-findContinue bounds Progress{priority, continues} =
-  mfilter (\c -> all (Set.member c) bounds) (snd <$> IntMap.lookupMin priority) >>= (`IntMap.lookup` continues)
+findContinue :: Constraints -> Progress -> Maybe Continue
+findContinue Constraints{cDeterministic, cBounds} Progress{priority, continues} =
+  mfilter deterministic (mfilter bounded cursor >>= (`IntMap.lookup` continues))
+  where
+    bounded c = all (Set.member c) cBounds
+    deterministic Continue{choices, area} =
+      not cDeterministic ||
+        (2 > Bit.shiftR choices choicesCount) ||
+        area == 1
+    cursor = snd <$> IntMap.lookupMin priority
 
 popContinue :: Progress -> Progress
 popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = IntMap.delete cursor c }
@@ -729,26 +739,6 @@ islandizeFirst p = do
   let firstIsland = snd <$> IntMap.lookupMin (priority p)
   pure (maybe p (\cursor -> prioritizeContinues p cursor (set islandL 1 . fromJust)) firstIsland)
 
-islandizeArea :: Progress -> IO Progress
-islandizeArea p = do -- (islandizeFirst =<<) $
-  islands <- traverse (islandChoices p) . fst =<< (islands p)
-  pure . reduce p islands $ \_i@Island{iConts, iChoices} p ->
-    reduce p iConts $ \Continue{cursor} p ->
-      prioritizeContinues p cursor (set areaL iChoices . set islandL 1 . fromJust)
-  where
-    reduce a l f = foldr f a l
-
-islandChoices :: Progress -> Island -> IO Island
-islandChoices p i@Island{iBounds} = do
-  let constraints = Constraints 100 False (Just iBounds)
-  solutions <- iterateMaybeM 25000 (solve' constraints) =<< islandProgress i
-  pure (i { iChoices = length $ groupSortOn (compCounts . components) solutions})
-  where
-    islandProgress :: Island -> IO Progress
-    islandProgress Island{iConts=(Continue{cursor}:_)} =
-      mazeL (boardL MV.clone) (prioritizeContinues ip cursor (set islandL 2 . fromJust))
-      where ip = p { space = [], unwinds = [] }
-
 islands :: Progress -> IO ([Island], IntMap Int)
 islands Progress{maze=maze@MMaze{width}, continues} = do
   islands <- snd <$> foldIsland perIsland (map (mazeCursor width . cursor . snd) . IntMap.toList $ continues)
@@ -774,6 +764,26 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
     fillNextSolved continues _ cur@(x, y) _ deltasWall = do
       when ((x + y * width) `IntMap.member` continues) $ State.modify (Set.insert cur)
       pure . map (mazeDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
+
+islandChoices :: Progress -> Island -> IO Island
+islandChoices p i@Island{iBounds} = do
+  let constraints = Constraints 100 False (Just iBounds)
+  solutions <- iterateMaybeM 25000 (solve' constraints) =<< islandProgress i
+  pure (i { iChoices = length $ groupSortOn (compCounts . components) solutions})
+  where
+    islandProgress :: Island -> IO Progress
+    islandProgress Island{iConts=(Continue{cursor}:_)} =
+      mazeL (boardL MV.clone) (prioritizeContinues ip cursor (set islandL 2 . fromJust))
+      where ip = p { space = [], unwinds = [] }
+
+islandizeArea :: Progress -> IO Progress
+islandizeArea p = do -- (islandizeFirst =<<) $
+  islands <- traverse (islandChoices p) . fst =<< (islands p)
+  pure . reduce p islands $ \_i@Island{iConts, iChoices} p ->
+    reduce p iConts $ \Continue{cursor} p ->
+      prioritizeContinues p cursor (set areaL iChoices . set islandL 1 . fromJust)
+  where
+    reduce a l f = foldr f a l
 
 {--- Island potential connectivity graphing ---}
 
@@ -834,24 +844,23 @@ solveContinue
 -- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
 -- This returns a progress with 'space' that always has an element or the maze isn't solvable
 -- (assuming the algo's correct and the stack hasn't been split for divide and conquer).
-backtrack :: Bool -> Progress -> IO (Maybe (Progress, Continue))
-backtrack _ Progress{space=[]} = pure Nothing
-backtrack _ Progress{space=([]:_), unwinds=[]} = pure Nothing
-backtrack _ p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazePop maze unwind >> backtrack True p { space, unwinds }
-backtrack _popped Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} = do
+backtrack :: Progress -> IO (Maybe (Progress, Continue))
+backtrack Progress{space=[]} = pure Nothing
+backtrack Progress{space=([]:_), unwinds=[]} = pure Nothing
+backtrack p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazePop maze unwind >> backtrack p { space, unwinds }
+backtrack Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} = do
   pure (Just (p { maze, iter, unwinds, space = guesses : space }, continue))
 
 -- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
 solve' :: Constraints -> Progress -> IO (Maybe Progress)
 solve' _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
-solve' cstrs@(Constraints life det bounds) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
-  -- print (findContinue progress)
-  guesses <- foldMap guesses (maybeToList (findContinue bounds progress))
-  progress' <- backtrack False . (spaceL %~ (guesses :)) =<< pure progress
+solve' cstrs@(Constraints life det _) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
+  guesses <- foldMap guesses (maybeToList (findContinue cstrs progress))
+  progress' <- backtrack . (spaceL %~ (guesses :)) =<< pure progress
   progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
 
-  let bounded = not (null (progress' >>= findContinue bounds))
-  let stop = depth == size - 1 || life == 0 || (det && (length guesses /= 1)) || not bounded
+  let unbounded = null (progress' >>= findContinue cstrs)
+  let stop = depth == size - 1 || life == 0 || (det && (length guesses /= 1)) || unbounded
   next stop progress'
   where
     next True = pure
