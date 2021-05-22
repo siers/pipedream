@@ -64,7 +64,7 @@ module Pipemaze (
   , deltaContinue, prioritizeDeltas, prioritizeIslands, rescoreContinue, prioritizeContinues
   , pieceDead, findContinue
   -- * Island computations
-  , FillNext, flood, islandizeFirst, islandizeArea, islands, graphIslands, previewIslands
+  , FillNext, flood, islandizeFirst, islands, graphIslands, previewIslands
   -- * Solver brain
   , solveContinue, solve', initProgress, backtrack, solve
   -- * Main
@@ -260,8 +260,8 @@ makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (+
 
 -- | unlawful
 instance Show Progress where
-  show Progress{iter, priority} =
-    "Progress" ++ show ('@', iter, 'c', length priority)
+  show Progress{depth, iter} =
+    "Progress" ++ show (depth, '/', iter)
 
 -- | unlawful
 instance Show MMaze where
@@ -386,6 +386,9 @@ partEquate maze v = loop' =<< find v
   where
     find f = (\Piece{connected, partId} -> if connected then partId else f) <$> mazeRead maze f
     loop' v' = (\found -> if v' == v || v' == found then pure v' else loop' found) =<< find v'
+
+progressClone :: Progress -> IO Progress
+progressClone = mazeL (boardL MV.clone)
 
 {--- Rendering, tracing ---}
 
@@ -765,25 +768,32 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       when ((x + y * width) `IntMap.member` continues) $ State.modify (Set.insert cur)
       pure . map (mazeDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
-islandChoices :: Progress -> Island -> IO Island
-islandChoices p i@Island{iBounds} = do
-  let constraints = Constraints 100 False (Just iBounds)
-  solutions <- iterateMaybeM 25000 (solve' constraints) =<< islandProgress i
-  pure (i { iChoices = length $ groupSortOn (compCounts . components) solutions})
+islandChoices :: Progress -> Island -> IO [([[PartId]], [Progress])]
+islandChoices p@Progress{components=Components' compInit} i@Island{iBounds} = do
+  let constraints = Constraints 100000 False (Just iBounds)
+  solutions <- iterateMaybeM 25000 (\p -> solve' constraints =<< progressClone p) =<< islandProgress i
+  traverse (\p -> (, p) <$> nodes (head p)) . groupSortOn (compCounts . components) $ solutions
   where
+    compDiff = on IntSet.difference IntMap.keysSet
+
+    nodes :: Progress -> IO [[PartId]]
+    nodes Progress{maze, components=Components' compJoin} =
+      fmap (map (map snd) . groupSortOn fst) . traverse (\p -> (, p) <$> partEquate maze p) $
+        IntSet.toList (compDiff compInit compJoin)
+
     islandProgress :: Island -> IO Progress
     islandProgress Island{iConts=(Continue{cursor}:_)} =
-      mazeL (boardL MV.clone) (prioritizeContinues ip cursor (set islandL 2 . fromJust))
+      pure (prioritizeContinues ip cursor (set islandL 2 . fromJust))
       where ip = p { space = [], unwinds = [] }
 
-islandizeArea :: Progress -> IO Progress
-islandizeArea p = do -- (islandizeFirst =<<) $
-  islands <- traverse (islandChoices p) . fst =<< (islands p)
-  pure . reduce p islands $ \_i@Island{iConts, iChoices} p ->
-    reduce p iConts $ \Continue{cursor} p ->
-      prioritizeContinues p cursor (set areaL iChoices . set islandL 1 . fromJust)
-  where
-    reduce a l f = foldr f a l
+-- islandizeArea :: Progress -> IO Progress
+-- islandizeArea p = do -- (islandizeFirst =<<) $
+--   islands <- traverse (islandChoices p) . fst =<< (islands p)
+--   pure . reduce p islands $ \_i@Island{iConts, iChoices} p ->
+--     reduce p iConts $ \Continue{cursor} p ->
+--       prioritizeContinues p cursor (set areaL iChoices . set islandL 1 . fromJust)
+--   where
+--     reduce a l f = foldr f a l
 
 {--- Island potential connectivity graphing ---}
 
@@ -854,13 +864,13 @@ backtrack Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} =
 -- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
 solve' :: Constraints -> Progress -> IO (Maybe Progress)
 solve' _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
-solve' cstrs@(Constraints life det _) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
+solve' cstrs@(Constraints life _ _) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
   guesses <- foldMap guesses (maybeToList (findContinue cstrs progress))
   progress' <- backtrack . (spaceL %~ (guesses :)) =<< pure progress
   progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
 
   let unbounded = null (progress' >>= findContinue cstrs)
-  let stop = depth == size - 1 || life == 0 || (det && (length guesses /= 1)) || unbounded
+  let stop = depth == size - 1 || life == 0 || unbounded
   next stop progress'
   where
     next True = pure
@@ -887,7 +897,8 @@ initProgress m@MMaze{trivials} =
 solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
-  p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (Constraints (-1) True Nothing) p)
+  p <- componentRecalc True =<< fmap fromJust (solve' (Constraints (-1) True Nothing) p)
+  -- p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (Constraints (-1) True Nothing) p)
   -- traverse print =<< (islandsSolutions p . sortOn (iSize) . fst =<< islands p)
   -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
   -- previewIslands p
@@ -903,13 +914,13 @@ solve m = do
   where
     traceIslands = renderImage' "islandize"
 
-    -- Progress.components = Components -> Components'
-    componentRecalc :: Bool -> Progress -> IO Progress
-    componentRecalc deep p@Progress{maze, continues} = do
-      comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
-      pure . (\c -> p { components = c }) $
-        if deep then Components' comps else Components (IntMap.map IntSet.size comps)
-      where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
+-- Progress.components = Components -> Components'
+componentRecalc :: Bool -> Progress -> IO Progress
+componentRecalc deep p@Progress{maze, continues} = do
+  comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
+  pure . (\c -> p { components = c }) $
+    if deep then Components' comps else Components (IntMap.map IntSet.size comps)
+  where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
 
 {--- Main ---}
 

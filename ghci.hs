@@ -160,10 +160,40 @@ fmap depth . fmap fromJust . solve' (-1) False =<< fmap fromJust . solve' (-1) F
 
 -- 2021-05-17-19:08:37
 
+progressClone = mazeL (boardL MV.clone) :: Progress -> IO Progress
+-- fmap fromJust (solve' (Constraints 1 False Nothing) =<< progressClone p_)
+progressRender p_
+
 :l Pipemaze
 showSpace = filter (not . null . fst) . flip zip [0..] . fmap (fmap fst) . space
-progressRender = (\p -> putStrLn "\x1b[H\x1b[2K" >> render (maze p))
-progressClone = mazeL (boardL MV.clone) :: Progress -> IO Progress
 p_ <- initProgress =<< parse =<< readFile "samples/3"
-p_ <- fmap fromJust (solve' deterministic p_)
-fmap fromJust (solve' (Constraints 1 False Nothing) =<< progressClone p_)
+p_ <- componentRecalc True . fromJust =<< (solve' deterministic p_)
+is <- fmap (sortOn length) . traverse (islandChoices p_) . fst =<< (islands p_)
+bigIsleI <- last . sortOn iSize . fst <$> islands p_
+fmap (map (map depth . snd)) . islandChoices p_ $ bigIsleI
+
+bigIsle = last (sortOn length is) -- equivalent solutions grops
+() <$ for is print
+
+import Control.Concurrent (threadDelay)
+progressRender = (\p -> putStrLn "\x1b[H\x1b[2K" >> render (maze p))
+progressRenders = traverse_ ((>> threadDelay 1000000) . progressRender)
+
+progressRenders (head (map snd bigIsle)) -- plot all equivalent island solves
+progressRenders (map (head . snd) bigIsle) -- plot all distinct island solves
+
+progressRender p_
+progressRender (head (map (head . snd) bigIsle))
+
+mazeCursor 25 . head . sort . map cursor . iConts $ bigIsleI
+
+() <$ for (map (map (nubOrdOn depth . snd)) is) print
+() <$ for (map (map (map depth . nubOrdOn depth . snd)) is) print
+
+(depth p_ ==) <$> (length . V.filter solved <$> V.freeze (board (maze p_)))
+
+fmap (map (map depth . nubOrdOn depth . snd)) . islandChoices p_ $ bigIsleI
+fmap (map (map depth . snd)) . islandChoices p_ $ bigIsleI
+traverse print =<< (islandChoices p_ $ bigIsleI)
+
+  print (depth, stop, ' ', depth == size - 1, life, life == 0, unbounded)
