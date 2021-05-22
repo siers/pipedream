@@ -232,6 +232,11 @@ data Progress = Progress
   , maze :: MMaze
   } deriving (Eq, Ord, Generic)
 
+-- | unlawful
+instance Show Progress where
+  show Progress{depth, iter} =
+    "Progress" ++ show (depth, '/', iter)
+
 data Constraints = Constraints
   { cLifespan :: Int
   , cDeterministic :: Bool
@@ -247,7 +252,7 @@ data Island = Island
   , iSize :: Int
   , iConts :: [Continue]
   , iBounds :: Set Fursor
-  , iChoices :: Int -- ^ number of distinct neighbouring components
+  , iChoices :: [([[PartId]], [Progress])] -- ^ all possible combinations (partitioned by equivalence)
   , iAp :: Bool
   } deriving (Show, Eq, Ord, Generic)
 
@@ -259,11 +264,6 @@ makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (+
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Island
 
 -- | unlawful
-instance Show Progress where
-  show Progress{depth, iter} =
-    "Progress" ++ show (depth, '/', iter)
-
--- | unlawful
 instance Show MMaze where
   -- | unlawful instance
   show _ = "MMaze"
@@ -271,7 +271,7 @@ instance Show MMaze where
 instance ToJSON Piece
 instance ToJSON Continue
 instance ToJSON Components
-instance ToJSON Island
+-- instance ToJSON Island
 
 -- | From: https://hackage.haskell.org/package/monad-extras-0.6.0/docs/src/Control-Monad-Extra.html#iterateMaybeM
 -- | Monadic equivalent to 'iterate', which uses Maybe to know when to
@@ -760,7 +760,7 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       let iConts = (continues IntMap.!) . fursorEmbed <$> (Set.toList borders)
       -- iNeigh <- length . nubOrd <$> traverse (partEquate maze . origin) iConts
       let iBounds = Set.map fursorEmbed area
-      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts iBounds 0 False
+      let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts iBounds [] False
       pure (visited `Set.union` borders, island : islands)
 
     fillNextSolved :: Continues -> FillNext (Set Cursor)
@@ -771,8 +771,8 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
 islandChoices :: Progress -> Island -> IO [([[PartId]], [Progress])]
 islandChoices p@Progress{components=Components' compInit} i@Island{iBounds} = do
   let constraints = Constraints 100000 False (Just iBounds)
-  solutions <- iterateMaybeM 25000 (\p -> solve' constraints =<< progressClone p) =<< islandProgress i
-  traverse (\p -> (, p) <$> nodes (head p)) . groupSortOn (compCounts . components) $ solutions
+  solutions <- iterateMaybeM 100 (\p -> solve' constraints =<< progressClone p) =<< islandProgress i
+  traverse (\p -> (, take 1 p) <$> nodes (head p)) . groupSortOn (compCounts . components) $ solutions
   where
     compDiff = on IntSet.difference IntMap.keysSet
 
@@ -786,14 +786,14 @@ islandChoices p@Progress{components=Components' compInit} i@Island{iBounds} = do
       pure (prioritizeContinues ip cursor (set islandL 2 . fromJust))
       where ip = p { space = [], unwinds = [] }
 
--- islandizeArea :: Progress -> IO Progress
--- islandizeArea p = do -- (islandizeFirst =<<) $
---   islands <- traverse (islandChoices p) . fst =<< (islands p)
---   pure . reduce p islands $ \_i@Island{iConts, iChoices} p ->
---     reduce p iConts $ \Continue{cursor} p ->
---       prioritizeContinues p cursor (set areaL iChoices . set islandL 1 . fromJust)
---   where
---     reduce a l f = foldr f a l
+islandizeArea :: Progress -> IO Progress
+islandizeArea p = do
+  islands <- traverse (\i -> set iChoicesL <$> islandChoices p i <*> pure i) . fst =<< (islands p)
+  pure . reduce p islands $ \_i@Island{iConts, iChoices} p ->
+    reduce p iConts $ \Continue{cursor} p ->
+      prioritizeContinues p cursor (set areaL (length iChoices) . set islandL 1 . fromJust)
+  where
+    reduce a l f = foldr f a l
 
 {--- Island potential connectivity graphing ---}
 
@@ -893,27 +893,23 @@ initProgress m@MMaze{trivials} =
     p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] [] m
   in foldr (\c@Continue{cursor} p -> prioritizeContinues p cursor (return c)) p <$> traverse init (zip [0..] trivials)
 
+solveTrivialIslands :: Progress -> IO Progress
+solveTrivialIslands p | findContinue deterministic p == Nothing = pure p
+solveTrivialIslands p = solve' deterministic p >>= islandizeArea . fromJust >>= solveTrivialIslands
+
 -- | Solver main, returns solved maze
 solve :: MMaze -> IO MMaze
 solve m = do
   p <- initProgress m
-  p <- componentRecalc True =<< fmap fromJust (solve' (Constraints (-1) True Nothing) p)
-  -- p <- islandizeArea =<< componentRecalc True =<< fmap fromJust (solve' (Constraints (-1) True Nothing) p)
-  -- traverse print =<< (islandsSolutions p . sortOn (iSize) . fst =<< islands p)
-  -- p <- islandizeFirst =<< componentRecalc True =<< solve' (-1) True p
-  -- previewIslands p
-  -- iterateMaybeM (solve' (-1) False) p
-  p <- fmap (maybe p id) . solve' (Constraints (-1) False Nothing) =<< traceIslands p
-  -- p <- foldrM id p . replicate 10 $ (\p -> previewIslands =<< solve' 300000 False =<< traceIslands p)
-  -- print . ap =<< graphIslands p
+  p <- componentRecalc True =<< fmap fromJust (solve' deterministic p)
+  p <- solveTrivialIslands =<< islandizeArea p
+  p <- fmap (maybe p id) . solve' unconstrained =<< traceIslands p
 
   let Progress{iter, depth, maze} = p
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
-  -- maze <$ renderImage' "done" solved
-  pure maze
+  maze <$ renderImage' "done" p
   where
     traceIslands = renderImage' "islandize"
-
 -- Progress.components = Components -> Components'
 componentRecalc :: Bool -> Progress -> IO Progress
 componentRecalc deep p@Progress{maze, continues} = do

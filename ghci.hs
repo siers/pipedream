@@ -158,6 +158,11 @@ fmap depth . fmap fromJust . solve' (-1) False =<< fmap fromJust . solve' (-1) F
 λ: iterateMaybeM 1000 f 7
 [8,9,10,11,12,13,14]
 
+-- 2021-05-22-17:06:30
+
+l = map Set.fromList [[1], [2,1], [1,2]]
+map head . groupSortOn id $ l
+
 -- 2021-05-17-19:08:37
 
 progressClone = mazeL (boardL MV.clone) :: Progress -> IO Progress
@@ -170,9 +175,8 @@ p_ <- initProgress =<< parse =<< readFile "samples/3"
 p_ <- componentRecalc True . fromJust =<< (solve' deterministic p_)
 is <- fmap (sortOn length) . traverse (islandChoices p_) . fst =<< (islands p_)
 bigIsleI <- last . sortOn iSize . fst <$> islands p_
-fmap (map (map depth . snd)) . islandChoices p_ $ bigIsleI
-
 bigIsle = last (sortOn length is) -- equivalent solutions grops
+
 () <$ for is print
 
 import Control.Concurrent (threadDelay)
