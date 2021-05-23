@@ -337,10 +337,9 @@ mazeClone :: MMaze -> IO MMaze
 mazeClone = boardL MV.clone
 
 {-# INLINE mazeSolve #-}
-mazeSolve :: MMaze -> Continue -> IO Unwind
+mazeSolve :: MMaze -> Continue -> IO ()
 mazeSolve m Continue{char, cursor, island} =
-  (cursor, ) <$> mazeRead m cursor <* mazeModify m modify cursor
-  where modify p = p { pipe = char, solved = True, wasIsland = if island > 0 then True else False }
+  mazeModify m (\p -> p { pipe = char, solved = True, wasIsland = if island > 0 then True else False }) cursor
 
 {-# INLINE mazeDelta #-}
 mazeDelta :: Cursor -> Direction -> Cursor
@@ -371,11 +370,11 @@ mazeDeltaWall m@MMaze{width} c dir =
 
 {-# INLINE mazeEquate #-}
 -- | Connects 'PartId's on the board
-mazeEquate :: MMaze -> PartId -> [Fursor] -> IO [Unwind]
+mazeEquate :: MMaze -> PartId -> [Fursor] -> IO ()
 mazeEquate m partId cursors =
-  traverse (\c -> (c, ) <$> mazeRead m c) cursors
-  <* traverse (mazeModify m (\p -> p { partId, connected = True })) cursors
+  void (traverse (mazeModify m (\p -> p { partId, connected = True })) cursors)
 
+{-# INLINE mazePop #-}
 mazePop :: MMaze -> [Unwind] -> IO ()
 mazePop m = traverse_ (uncurry (flip (mazeModify m . const)))
 
@@ -521,8 +520,8 @@ pixMap = Map.fromList $ map swap charMapEntries
 -- | This accounts for some piece's rotational symmetry
 pixRotations :: Pix -> [Rotation]
 pixRotations 0b11111111 = [0]
-pixRotations 0b10101010 = [0,1]
-pixRotations 0b01010101 = [0,1]
+pixRotations 0b10101010 = [0, 1]
+pixRotations 0b01010101 = [0, 1]
 pixRotations _ = rotations
 
 {-# INLINE pixDirections #-}
@@ -573,10 +572,13 @@ validateRotationM maze cursor this rotation =
 {-# INLINE pieceChoices #-}
 -- | Compute initial rotation fields for a piece's 'Choices'
 pieceChoices :: MMaze -> Cursor -> IO Choices
-pieceChoices maze@MMaze{width} cur@(x, y) = do
+pieceChoices maze@MMaze{width, height} cur@(x, y) = do
   Piece{pipe=this} <- mazeRead maze (x + y * width)
-  valids <- foldMap (\d -> Sum (Bit.bit 4 + Bit.bit d)) <$> filterM (validateRotationM maze cur this) (pixRotations this)
-  pure . flip Bit.shiftL choicesInvalid . Bit.xor 0b1111 . getSum $ valids
+  if not ((x + 1) `mod` width < 2 || ((y + 1) `mod` height < 2) || this == 0b11111111 || this == 0b01010101 || this == 0b10101010)
+  then pure (Bit.shiftL 4 choicesCount)
+  else do
+    valids <- foldMap (\d -> Sum (Bit.bit 4 + Bit.bit d)) <$> filterM (validateRotationM maze cur this) (pixRotations this)
+    pure . flip Bit.shiftL choicesInvalid . Bit.xor 0b1111 . getSum $ valids
 
 {--- Solver bits: components ---}
 
@@ -840,16 +842,18 @@ solveContinue :: Progress -> Continue -> IO Progress
 solveContinue
   progress@Progress{maze=maze@MMaze{width}, components = components_}
   continue@Continue{cursor, char, origin = origin_} = do
-    unwindThis <- mazeSolve maze continue
+    unwindThis <- pure . (cursor, ) <$> mazeRead maze cursor
+    mazeSolve maze continue
     thisPart <- partEquate maze origin_
     let directDeltas = map (mazeFDelta width cursor) $ pixDirections char
     neighbours <- fmap (nubOrd . (thisPart :)) . traverse (partEquate maze) $ directDeltas
     let origin = minimum neighbours
     let components = compEquate origin (filter (/= origin) (neighbours)) (compRemove thisPart cursor components_)
-    unwindEquate <- mazeEquate maze origin neighbours
+    unwindEquate <- traverse (\c -> (c, ) <$> mazeRead maze c) neighbours
+    mazeEquate maze origin neighbours
 
     progress' <- prioritizeIslands directDeltas =<< prioritizeDeltas width progress { components } continue { origin }
-    traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ [unwindThis]) :)
+    traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ unwindThis) :)
 
 -- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
 -- This returns a progress with 'space' that always has an element or the maze isn't solvable
