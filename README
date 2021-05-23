@@ -8,15 +8,37 @@ running
 running with websocket
   websocket=1 ./solve
 
-running with profiler
-  ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' && ./solve < samples/3
-
-to enable/disable progress info, fiddle with code in traceBoard
-
 fun things to do for visualizations:
   remove coloring by equivalent parts in renderWithPositions
   screw with the score variable in sortContinues
   increase the frequency to see more intermediate steps
+
+--
+
+with profiler
+  % ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' -fexternal-interpreter && ./solve < samples/1
+
+print trace of crash
+  % ghc Main.hs -o solve -prof -with-rtsopts='-xc' && ./solve < samples/2
+
+restrict heap
+  $ ghc Main.hs -o solve -rtsopts -with-rtsopts='-M1024m' && ./solve < samples/3
+
+run 8 cores
+  % ghc Main.hs -o solve -threaded -with-rtsopts='-N8' && time ./solve < ./samples/3
+
+:l solve without having to resolve all type errors (amazing!)
+  % ghci -fdefer-type-errors
+
+--
+
+get more samples
+  % (set -x; for i in {1..50}; do suffix=-$i ./samples/get 4 &; done; wait < <(jobs -p))
+
+get 50 samples per level
+  % (set -x; for level in {1..6}; do for i in {01..50}; do format="trash/samples/%i-$i" ./samples/get $level &; done; done; wait < <(jobs -p))
+
+--
 
 ┏╸╺┓┏━╸╻┏━━╸╺┳╸╻╻╻╻╺┳╸┏━┓
 ┗┳┳┻┻╸╻┣╋╸╻╻╺┫┏┫┃┣┫╻┗┳┻┓╹
