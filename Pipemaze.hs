@@ -48,7 +48,7 @@ This combined lets you solve around 98% of the level 6 maze determinstically, bu
 module Pipemaze (
   -- * Types
   Direction, Rotation, Pix, Cursor, Fursor, MMaze(..), Piece(..), Choices, PartId, Continue(..)
-  , Priority, Continues, Components(..), Unwind, Progress(..), Island(..)
+  , Priority, Continues, Components(..), Unwind, Progress(..), Island(..), Bounds, Constraints
   -- * Maze operations
   , parse, mazeStore, mazeBounded, mazeRead, mazeSolve, mazeDelta, mazeFDelta, mazeEquate, mazePop, partEquate
   -- * Tracing and rendering
@@ -77,6 +77,7 @@ import Control.Lens.Internal.FieldTH (makeFieldOptics, LensRules(..))
 import Language.Haskell.TH.Syntax (mkName, nameBase)
 import Control.Lens.TH (DefName(..), lensRules)
 
+import Control.Concurrent (getNumCapabilities)
 import Control.Lens ((&), (%~), set, _2)
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad.IO.Class (liftIO)
@@ -85,12 +86,12 @@ import Control.Monad.Primitive (RealWorld)
 import Control.Monad.Trans.State.Strict (StateT(..))
 import Data.Bifunctor (bimap)
 import Data.Char (ord)
-import Data.Foldable (traverse_, for_, foldrM)
+import Data.Foldable (traverse_, for_, foldrM, fold)
 import Data.Function (on)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
-import Data.List (elemIndex, sortOn)
-import Data.List.Extra (nubOrd, groupSortOn)
+import Data.List (elemIndex)
+import Data.List.Extra (nubOrd, groupSort, groupSortOn)
 import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
 import Data.Monoid (Sum(..))
@@ -113,6 +114,9 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import System.Environment (lookupEnv, getArgs)
 import Text.Printf (printf)
+
+-- parallel
+import Control.Concurrent.ParallelIO.Global (parallelInterleaved)
 
 -- graph debug
 import Control.Concurrent (forkIO)
@@ -237,21 +241,24 @@ instance Show Progress where
   show Progress{depth, iter} =
     "Progress" ++ show (depth, '/', iter)
 
+type Bounds = Maybe (Fursor -> Bool)
+
 data Constraints = Constraints
   { cLifespan :: Int
   , cDeterministic :: Bool
-  , cBounds :: Maybe (Set Fursor)
-  } deriving (Show, Eq, Ord, Generic)
+  , cBounds :: Bounds
+  , cParallel :: Bool -- this will make unbounded continues to be prioritized to the end
+  } -- deriving (Show, Eq, Ord, Generic)
 
-unconstrained = Constraints (-1) False Nothing
-deterministic = Constraints (-1) True Nothing
+unconstrained = Constraints (-1) False Nothing False
+deterministic = Constraints (-1) True Nothing False
 
 -- | Island is the patch of unsolved pieces surrounded by solved pieces, computed by `flood` in `islands`.
 data Island = Island
   { iId :: Int
   , iSize :: Int
   , iConts :: [Continue]
-  , iBounds :: Set Fursor
+  , iBounds :: IntSet
   , iChoices :: [([[PartId]], [Progress])] -- ^ all possible combinations (partitioned by equivalence)
   , iChoicesN :: Int -- ^ same, but without details
   , iAp :: Bool
@@ -323,8 +330,13 @@ mazeBounded' width height (!x, !y) = x >= 0 && y >= 0 && width > x && height > y
 vectorLists :: Int -> Int -> V.Vector a -> [[a]]
 vectorLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
+{-# INLINE mazeCursor #-}
 mazeCursor :: Int -> Int -> Cursor
 mazeCursor width = swap . flip quotRem width
+
+{-# INLINE mazeFursor #-}
+mazeFursor :: Int -> Cursor -> Fursor
+mazeFursor w (x, y) = x + y * w
 
 {-# INLINE mazeRead #-}
 mazeRead :: MMaze -> Fursor -> IO Piece
@@ -574,7 +586,7 @@ validateRotationM maze cursor this rotation =
 -- | Compute initial rotation fields for a piece's 'Choices'
 pieceChoices :: MMaze -> Cursor -> IO Choices
 pieceChoices maze@MMaze{width, height} cur@(x, y) = do
-  Piece{pipe=this} <- mazeRead maze (x + y * width)
+  Piece{pipe=this} <- mazeRead maze (mazeFursor width cur)
   if not ((x + 1) `mod` width < 2 || ((y + 1) `mod` height < 2) || this == 0b11111111 || this == 0b01010101 || this == 0b10101010)
   then pure (Bit.shiftL 4 choicesCount)
   else do
@@ -644,9 +656,9 @@ deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initCho
 
 {-# INLINE prioritizeDeltas #-}
 -- | Calls 'prioritizeContinue' on nearby pieces (delta = 1)
-prioritizeDeltas :: Int -> Progress -> Continue -> IO Progress
-prioritizeDeltas width p@Progress{iter, maze} continue@Continue{cursor=cur, choices} = do
-  fmap (prioritizeContinues p) . for (zip [0..] (pixNDirections choices)) $ \(i, d) -> do
+prioritizeDeltas :: Bounds -> Int -> Progress -> Continue -> IO Progress
+prioritizeDeltas bounds width p@Progress{iter, maze} continue@Continue{cursor=cur, choices} = do
+  fmap (prioritizeContinues bounds p) . for (zip [0..] (pixNDirections choices)) $ \(i, d) -> do
     piece <- mazeRead maze (mazeFDelta width cur d)
     let delta = mazeFDelta width cur d
     pure (delta, deltaContinue continue (iter * 4 + i) delta d piece)
@@ -670,39 +682,40 @@ prioritizeIslands directDeltas p@Progress{maze, components = (Components' _)} = 
 -- | Recalculates the 'Continue's score, less is better (because of 'IntMap.deleteFindMin' in 'findContinue').
 --
 -- > score = (0 - island << 17 + (choices << (15 - choicesCount)) + x + y) << 32 + created
-rescoreContinue :: Int -> Continue -> Continue
-rescoreContinue width c@Continue{cursor, choices=choicesBits, island, area, created} = set scoreL score c
+rescoreContinue :: Bounds -> Int -> Continue -> Continue
+rescoreContinue bounds width c@Continue{cursor, choices=choicesBits, island, area, created} = set scoreL score c
   where
-    score = (0 - island << 27 + area << 15 + (choices << (12 - choicesCount)) + x + y) << 28 + created
+    score = (0 + bound << 34 - island << 27 + area << 15 + (choices << (12 - choicesCount)) + x + y) << 28 + created
+    bound = if all ($ cursor) bounds then 0 else 1
     choices = choicesBits Bit..&. (0b11 << choicesCount)
     (<<) = Bit.shiftL
     (x, y) = mazeCursor width cursor
 
 {-# INLINE prioritizeContinue' #-}
-prioritizeContinue' :: Int -> (Priority, Components, Continues) -> Fursor -> (Maybe Continue -> Continue) -> (Priority, Components, Continues)
-prioritizeContinue' width (p, cp, ct) c get = found (IntMap.lookup c ct)
+prioritizeContinue' :: Bounds -> Int -> (Priority, Components, Continues) -> Fursor -> (Maybe Continue -> Continue) -> (Priority, Components, Continues)
+prioritizeContinue' bounds width (p, cp, ct) c get = found (IntMap.lookup c ct)
   where
     found Nothing =
-      let new = rescoreContinue width (get Nothing)
+      let new = rescoreContinue bounds width (get Nothing)
       in (IntMap.insert (score new) c p, compInsert new cp, IntMap.insert c new ct)
     found (Just old@Continue{cursor, created, choices=choicesO}) =
       if score new < score old || choicesN /= choicesO
       then (IntMap.insert (score new) cursor . IntMap.delete (score old) $ p, cp, IntMap.insert c new ct)
       else (p, cp, ct)
-      where new@Continue{choices=choicesN} = rescoreContinue width (get (Just old)) { created }
+      where new@Continue{choices=choicesN} = rescoreContinue bounds width (get (Just old)) { created }
 
 {-# INLINE prioritizeContinues #-}
 -- | Inserts or reprioritizes 'Continue'
-prioritizeContinues :: Progress -> [(Fursor, Maybe Continue -> Continue)] -> Progress
-prioritizeContinues progress@Progress{maze=MMaze{width}, priority, continues, components} reprios =
+prioritizeContinues :: Bounds -> Progress -> [(Fursor, Maybe Continue -> Continue)] -> Progress
+prioritizeContinues bounds progress@Progress{maze=MMaze{width}, priority, continues, components} reprios =
   putback (foldr prio (priority, components, continues) reprios)
   where
     putback (p, cp, cn) = progress { priority = p, components = cp, continues = cn }
-    prio (c, get) acc = prioritizeContinue' width acc c get
+    prio (c, get) acc = prioritizeContinue' bounds width acc c get
 
 {-# INLINE prioritizeContinue #-}
 prioritizeContinue :: Progress -> Fursor -> (Maybe Continue -> Continue) -> Progress
-prioritizeContinue p = curry (prioritizeContinues p . pure)
+prioritizeContinue p = curry (prioritizeContinues Nothing p . pure)
 
 {-# INLINE pieceDead #-}
 -- | Check if 'Continue' is about to become separated from the rest of the graph.
@@ -718,7 +731,7 @@ findContinue :: Constraints -> Progress -> Maybe Continue
 findContinue Constraints{cDeterministic, cBounds} Progress{priority, continues} =
   mfilter deterministic (mfilter bounded cursor >>= (`IntMap.lookup` continues))
   where
-    bounded c = all (Set.member c) cBounds
+    bounded c = all ($ c) cBounds
     deterministic Continue{choices, area} =
       not cDeterministic || (2 > Bit.shiftR choices choicesCount) || area == 1
     cursor = snd <$> IntMap.lookupMin priority
@@ -758,7 +771,7 @@ islandizeArea islands p = do
 
 islandChoices :: Progress -> Island -> IO Island
 islandChoices p@Progress{components=Components' compInit} i@Island{iBounds} = do
-  let constraints = Constraints 100000 False (Just iBounds)
+  let constraints = unconstrained { cLifespan = 100000, cBounds = Just (`IntSet.member` iBounds) }
   solutions <- iterateMaybeM 100 (\p -> solve' constraints =<< progressClone p) =<< islandProgress i
   let !choices = length . groupSortOn (compCounts . components) $ solutions
   -- let choices = traverse (\p -> (, take 1 p) <$> nodes (head p)) . groupSortOn (compCounts . components) $ solutions
@@ -785,15 +798,13 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       (\acc -> foldrM acc (Set.empty, []) continues) $ \cursor acc@(visited, _) ->
         if (cursor `Set.member` visited) then pure acc else perIsland cursor acc
 
-    fursorEmbed = (\(x, y) -> x + y * width)
-
     -- border = island's border by continues
     perIsland :: Cursor -> (Set Cursor, [Island]) -> IO (Set Cursor, [Island])
     perIsland cursor (visited, islands) = do
       (area, borders) <- flood (fillNextSolved continues) maze cursor
-      let iConts = (continues IntMap.!) . fursorEmbed <$> (Set.toList borders)
+      let iConts = (continues IntMap.!) . mazeFursor width <$> (Set.toList borders)
       -- iNeigh <- length . nubOrd <$> traverse (partEquate maze . origin) iConts
-      let iBounds = Set.map fursorEmbed area
+      let iBounds = IntSet.fromList . map (mazeFursor width) . Set.toList $ area
       let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts iBounds [] 0 False
       pure (visited `Set.union` borders, island : islands)
 
@@ -838,13 +849,14 @@ previewIslands p = (p <$) . forkIO . void $ do
       ]
     }
 
-{--- Solver ---}
+{--- Backtracking solver ---}
 
 -- | Solves a valid piece, mutates the maze and sets unwind.
 -- Inefficient access: partEquate reads the same data as islands reads.
 -- (All methods within this method are inlined)
-solveContinue :: Progress -> Continue -> IO Progress
+solveContinue :: Bounds -> Progress -> Continue -> IO Progress
 solveContinue
+  bounds
   progress@Progress{maze=maze@MMaze{width}, components = components_}
   continue@Continue{cursor, char, origin = origin_} = do
     unwindThis <- pure . (cursor, ) <$> mazeRead maze cursor
@@ -857,7 +869,7 @@ solveContinue
     unwindEquate <- traverse (\c -> (c, ) <$> mazeRead maze c) neighbours
     mazeEquate maze origin neighbours
 
-    progress' <- prioritizeDeltas width progress { components } continue { origin }
+    progress' <- prioritizeDeltas bounds width progress { components } continue { origin }
     traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ unwindThis) :)
 
 -- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
@@ -873,10 +885,10 @@ backtrack Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} =
 -- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
 solve' :: Constraints -> Progress -> IO (Maybe Progress)
 solve' _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
-solve' cstrs@(Constraints life _ _) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
+solve' cstrs@(Constraints life _ bounds parallel) progress@Progress{depth, maze=maze@MMaze{size}, components} = do
   guesses <- foldMap guesses (maybeToList (findContinue cstrs progress))
   progress' <- backtrack . (spaceL %~ (guesses :)) =<< pure progress
-  progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
+  progress' <- traverse (uncurry (solveContinue (mfilter (const parallel) bounds) . popContinue)) progress'
 
   let unbounded = null (progress' >>= findContinue cstrs)
   let stop = depth == size - 1 || life == 0 || unbounded
@@ -894,27 +906,70 @@ solve' cstrs@(Constraints life _ _) progress@Progress{depth, maze=maze@MMaze{siz
       disconnected <- pieceDead maze components cur pix choices
       pure ((depth == size - 1) || not disconnected)
 
-initProgress :: MMaze -> IO Progress
-initProgress m@MMaze{trivials} =
-  let
-    -- init continue created is probably not well scored, I don't understand why this doesn't break
-    init = \(i, c) -> (\Piece{pipe, initChoices} -> Continue c pipe c 0 (-i) 0 0 initChoices) <$> mazeRead m c
-    p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] [] m
-  in foldr (\c@Continue{cursor} p -> prioritizeContinue p cursor (return c)) p <$> traverse init (zip [0..] trivials)
+{--- Meta solver ---}
+
+-- Progress.components = Components -> Components'
+componentRecalc :: Bool -> Progress -> IO Progress
+componentRecalc deep p@Progress{maze, continues} = do
+  comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
+  pure . (\c -> p { components = c }) $ if deep then Components' comps else Components (IntMap.map IntSet.size comps)
+  where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
+
+solveDetParallel :: Int -> MMaze -> IO Progress
+solveDetParallel n m@MMaze{width} = do
+  (_, zeroth):rest <- divideProgress m
+  (Sum iter, continues) <- fmap fold . parallelInterleaved . map solvePar $ rest
+  pure (prioritizeContinues Nothing zeroth { iter, depth = iter } (map ((\c -> (cursor c, return c)) . snd) continues))
+  where
+    solvePar = (\(n, p) -> progressExtract . fromJust <$> solve' (constraints n) p)
+    progressExtract Progress{iter, continues} = (Sum iter, IntMap.toList continues)
+    constraints n = deterministic { cBounds = Just (\f -> mazeQuadrant m (mazeCursor width f) == n), cParallel = True }
+
+    divideProgress :: MMaze -> IO [(Int, Progress)]
+    divideProgress m@MMaze{width, trivials} =
+      let
+        p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] [] m
+        continue (i, c) = (\Piece{pipe, initChoices} -> (c, return (Continue c pipe c 0 (-i) 0 0 initChoices))) <$> mazeRead m c
+        quad = mazeQuadrant m
+      in do
+        continues <- traverse continue (zip [0..] trivials)
+        pure $ map (_2 %~ prioritizeContinues Nothing p) . groupSort . map (\c -> (quad . mazeCursor width . fst $ c, c)) $ continues
+
+    mazeQuadrant :: MMaze -> Cursor -> Int
+    mazeQuadrant MMaze{width} = uncurry (quadrant width) (coeff n)
+      where
+        coeff n = fromMaybe (error "define split for capabilities") (lookup n [(1, (1, 1)), (2, (2, 1)), (4, (2, 2)), (8, (4, 2))])
+
+        -- | Returns a unique quadrant id for a 0-based n-size grid split into s*s quadrants
+        -- which separated by lines of zeros. May be useful as the key function for groupSortOn.
+        -- https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+        quadrant :: Int -> Int -> Int -> Cursor -> Int
+        quadrant n' sx sy (x', y') = (`mod` 10) . (l *) . (1 +) $ x `div` qx + wrap * (y `div` qy)
+          where
+            (x, y, qx, qy, n) = (x' + 2 , y' + 2, n `div` sx + 1, n `div` sy + 1, n' + 2)
+            l = if x `mod` qx < 2 || y `mod` qy < 2 then 0 else 1
+            wrap = (n + qy) `div` qy -- wrap x = ceiling (n / q)
 
 solveTrivialIslands :: [Island] -> Progress -> IO Progress
 solveTrivialIslands _ p | findContinue deterministic p == Nothing = pure p
 solveTrivialIslands is p@Progress{maze} = do
   solve <- fromJust <$> solve' deterministic p
   -- print . sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoicesN $ is
-  i <- traverse (islandChoices p) =<< filterM islandUnsolved is
+  i <- parallelInterleaved . map (islandChoices p) =<< filterM islandUnsolved is
   solveTrivialIslands [] =<< islandizeArea i solve
   where islandUnsolved = fmap (not . solved) . mazeRead maze . cursor . head . iConts
 
+initProgress :: MMaze -> IO Progress
+initProgress m@MMaze{trivials} =
+  let
+    p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] [] m
+    continue (i, c) = (\Piece{pipe, initChoices} -> (c, return (Continue c pipe c 0 (-i) 0 0 initChoices))) <$> mazeRead m c
+  in prioritizeContinues Nothing p <$> traverse continue (zip [0..] trivials)
+
 -- | Solver main, returns solved maze
 solve :: MMaze -> IO MMaze
-solve m = do
-  p <- initProgress m
+solve maze = do
+  p <- initSolve maze =<< getNumCapabilities
   p <- componentRecalc True =<< fmap fromJust (solve' deterministic p)
   i <- traverse (islandChoices p) . fst =<< islands p
   p <- solveTrivialIslands i =<< islandizeArea i p
@@ -924,13 +979,9 @@ solve m = do
   putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double))
   maze <$ renderImage' "done" p
 
--- Progress.components = Components -> Components'
-componentRecalc :: Bool -> Progress -> IO Progress
-componentRecalc deep p@Progress{maze, continues} = do
-  comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
-  pure . (\c -> p { components = c }) $
-    if deep then Components' comps else Components (IntMap.map IntSet.size comps)
-  where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
+  where
+    initSolve m@MMaze{level=6} n | n > 1 = componentRecalc False =<< renderImage' "parallel" =<< solveDetParallel n m
+    initSolve m _ = initProgress m
 
 {--- Main ---}
 

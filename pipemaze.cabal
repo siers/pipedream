@@ -22,6 +22,8 @@ executable solve
     , hip
     , lens
     , network
+    , parallel
+    , parallel-io
     , primitive
     , template-haskell
     , text

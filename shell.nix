@@ -12,6 +12,8 @@ let
     hip
     lens
     network
+    parallel
+    parallel-io
     primitive
     text
     transformers
