@@ -417,9 +417,6 @@ partEquate maze v = loop' =<< find v
     find f = (\Piece{connected, partId} -> if connected then partId else f) <$> mazeRead maze f
     loop' v' = (\found -> if v' == v || v' == found then pure v' else loop' found) =<< find v'
 
-progressClone :: MonadIO m => Progress -> m Progress
-progressClone = liftIO . mazeL (boardL MV.clone)
-
 {--- Rendering, tracing ---}
 
 renderImage :: MonadIO m => String -> MMaze -> Continues -> m ()
@@ -768,10 +765,11 @@ islandizeArea islands p = do
       prioritizeContinue p cursor (set areaL iChoicesN . set islandL 1 . fromJust)
   where reduceM a l f = foldrM f a l
 
-islandChoices :: Progress -> Island -> SolverT Island
-islandChoices p@Progress{components=Components' compInit} i@Island{iBounds} = do
-  pi <- toSolverT (islandProgress i)
-  solutions <- iterateMaybeM 100 (\p -> constrain . solve' =<< (progressClone p)) pi
+islandChoices :: MMaze -> Progress -> Island -> SolverT Island
+islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{iBounds} = do
+  liftIO (MV.unsafeCopy (board maze') (board maze))
+  pi <- toSolverT (islandProgress i maze')
+  solutions <- iterateMaybeM 100 (constrain . solve') pi
   let !choices = length . groupSortOn (compCounts . components) $ solutions
   -- let choices = traverse (\p -> (, take 1 p) <$> nodes (head p)) . groupSortOn (compCounts . components) $ solutions
   pure (set iChoicesNL choices i)
@@ -784,8 +782,8 @@ islandChoices p@Progress{components=Components' compInit} i@Island{iBounds} = do
       fmap (map (map snd) . groupSortOn fst) . traverse (\p -> (, p) <$> partEquate maze p) $
         IntSet.toList (_compDiff compInit compJoin)
 
-    islandProgress Island{iConts=(Continue{cursor}:_)} =
-      prioritizeContinue (p { space = [], unwinds = [] }) cursor (set islandL 2 . fromJust)
+    islandProgress Island{iConts=(Continue{cursor}:_)} maze =
+      prioritizeContinue (p { maze, space = [], unwinds = [] }) cursor (set islandL 2 . fromJust)
 
 islands :: MonadIO m => Progress -> m ([Island], IntMap Int)
 islands Progress{maze=maze@MMaze{width}, continues} = do
@@ -952,8 +950,8 @@ solveDetParallel n m@MMaze{width} = do
             l = if x `mod` qx < 2 || y `mod` qy < 2 then 0 else 1
             wrap = (n + qy) `div` qy -- wrap x = ceiling (n / q)
 
-solveTrivialIslands :: [Island] -> Progress -> SolverT Progress
-solveTrivialIslands is p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
+solveTrivialIslands :: MMaze -> [Island] -> Progress -> SolverT Progress
+solveTrivialIslands copy is p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
   where
     solveT Nothing = pure p
     solveT (Just _) = do
@@ -961,8 +959,8 @@ solveTrivialIslands is p@Progress{maze} = solveT =<< determinstically (toSolverT
       solve <- fromJust <$> determinstically (solve' p)
       -- liftIO . print . sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoicesN $ is
       let islandUnsolved = fmap (not . solved) . mazeRead maze . cursor . head . iConts
-      i <- liftIO (parallelInterleaved . map (flip runReaderT conf . (islandChoices p)) =<< filterM islandUnsolved is)
-      solveTrivialIslands [] =<< toSolverT (islandizeArea i solve)
+      i <- liftIO (parallelInterleaved . map (flip runReaderT conf . (islandChoices copy p)) =<< filterM islandUnsolved is)
+      solveTrivialIslands copy [] =<< toSolverT (islandizeArea i solve)
 
 initProgress :: MMaze -> SolverT Progress
 initProgress m@MMaze{trivials} =
@@ -976,8 +974,11 @@ solve :: MMaze -> SolverT MMaze
 solve maze = do
   p <- initSolve maze =<< liftIO (getNumCapabilities)
   p <- componentRecalc True =<< fmap fromJust (determinstically (solve' p))
-  i <- traverse (islandChoices p) . fst =<< islands p
-  p <- solveTrivialIslands i =<< toSolverT (islandizeArea i p)
+
+  copy <- mazeClone maze
+  i <- traverse (islandChoices copy p) . fst =<< islands p
+  p <- solveTrivialIslands copy i =<< toSolverT (islandizeArea i p)
+
   p <- fmap (maybe p id) . solve' =<< renderImage' "islandize" p
 
   let Progress{iter, depth, maze} = p
