@@ -21,6 +21,7 @@ executable solve
     , graphviz
     , hip
     , lens
+    , mtl
     , network
     , parallel
     , parallel-io

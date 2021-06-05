@@ -11,6 +11,7 @@ let
     graphviz
     hip
     lens
+    mtl
     network
     parallel
     parallel-io
