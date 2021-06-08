@@ -6,7 +6,7 @@
 {-# LANGUAGE RankNTypes #-} -- for maybeSet
 
 {-# OPTIONS_GHC -Wall -Wno-name-shadowing -Wno-unused-do-bind -Wno-type-defaults -Wno-missing-signatures #-}
-{-# OPTIONS_GHC -Wno-unused-top-binds #-} -- complains about lens :/
+{-# OPTIONS_GHC -Wno-unused-top-binds #-} -- complains about unused lenses :/
 
 -- json
 {-# LANGUAGE DeriveGeneric #-}
@@ -31,11 +31,8 @@ to the other graphs later are being refered to as /components/. <https://en.wiki
 
 Solving each piece gives you hints about surrounding pieces,
 so solving them in our order('rescoreContinue') is more effective than solving in an arbitrary order. If the connectivity of the pieces is efficiently
-computed ('PartId' \/ 'partEquate'), the "open ends" ('Continues') have a good prioritization and the partial solutions on disconnected components
-are immediately discarded ('pieceDead' \/ 'compAlive'), the /visited piece/ ratio to /maze size/ is rather small (<4)
-for these specific mazes from the maze server.
-
-This combined lets you solve around 98% of the level 6 maze determinstically, but the priority after that (many unsolved islands) is not yet optimal.
+computed ('PartId' \/ 'partEquate'), the "open ends" ('Continues') have a good prioritization and the disconnected solves are efficiently computed
+and discarded ('pieceDead' \/ 'compAlive'), you can solve around 98% of the level 6 maze determinstically.
 -}
 
 module Pipemaze (
@@ -57,7 +54,7 @@ module Pipemaze (
   , deltaContinue, prioritizeDeltas, rescoreContinue, prioritizeContinues
   , pieceDead, findContinue
   -- * Island computations
-  , FillNext, flood, islands, graphIslands, previewIslands
+  , FillNext, flood, islands
   -- * Solver brain
   , solveContinue, solve', initProgress, backtrack, solve
   -- * Main
@@ -80,14 +77,13 @@ import Control.Monad (join, filterM, void, when, mfilter, liftM)
 import Control.Monad.Primitive (RealWorld)
 import Control.Monad.Reader (MonadReader(..), Reader, ReaderT(..), ask, withReaderT, mapReaderT)
 import Control.Monad.Trans.State.Strict (StateT(..))
-import Data.Bifunctor (bimap)
 import Data.Char (ord)
 import Data.Foldable (traverse_, for_, foldrM, fold)
 import Data.Function (on)
 import Data.Functor.Identity (Identity(..), runIdentity)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
-import Data.List (elemIndex, sortOn)
+import Data.List (elemIndex)
 import Data.List.Extra (nubOrd, groupSort, groupSortOn)
 import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
@@ -114,17 +110,6 @@ import Text.Printf (printf)
 
 -- parallel
 import Control.Concurrent.ParallelIO.Global (parallelInterleaved)
-
--- graph debug
-import Control.Concurrent (forkIO)
-import Data.Graph.Inductive.Graph (Graph(..), nmap)
-import Data.Graph.Inductive.PatriciaTree (Gr)
-import Data.Graph.Inductive.Query.ArtPoint (ap)
--- import Data.Graph.Inductive.Query.DFS (isConnected)
-import Data.GraphViz.Attributes.Colors (WeightedColor(..))
-import Data.GraphViz.Attributes.Complete (Color(..), Attribute(..), Shape(..), Overlap(..), EdgeType(..), DPoint(..), createPoint)
-import Data.GraphViz (GraphvizCanvas(..), GraphvizCommand(..), GraphvizParams(..), GraphvizOutput(..))
-import Data.GraphViz (runGraphvizCanvas, runGraphvizCommand, graphToDot, nonClusteredParams)
 
 -- json for debug outputs
 import Data.Aeson (ToJSON(..))
@@ -189,7 +174,7 @@ data Piece = Piece
 -- | 'Choices' is bit-packed info related to the valid rotations of a picce.
 -- In MSB order: (valid) rotation count 2b, invalid rotation directions 4b, solved requirements 4b, solved neighbours 4b
 type Choices = Int
-(choicesSolveds, choicesRequire, choicesInvalid, choicesCount) = (0, 4, 8, 12)
+(choicesSolveds, _choicesRequire, choicesInvalid, choicesCount) = (0, 4, 8, 12)
 
 -- | Continue represents the piece that should be solved next, which is an open end of a component or starts one.
 data Continue = Continue
@@ -281,7 +266,7 @@ determinstically = withReaderT (set cDeterministicL True)
 
 confDefault = Configuration
   { cDebug = 1
-  , cDebugFreq = 5000
+  , cDebugFreq = 4070
   , cLifespan = (-1)
   , cDeterministic = False
   , cBounds = Nothing
@@ -476,12 +461,6 @@ renderStr MMaze{board, width, height} = do
   unlines . map concat . vectorLists width height . V.map (return . toChar . pipe) . V.convert
   <$> V.freeze board
 
-islandCounts :: Progress -> (Int, Int)
-islandCounts Progress{continues} = bimap getSum getSum . foldMap count $ IntMap.toList continues
-  where
-    icount i n = Sum (fromEnum (i == n))
-    count (_, Continue{island=i}) = (icount i 2, icount i 1)
-
 -- | Tracing with at each @F\REQ@th step via @T\RACE@ (both compile-time variables, use with with @ghc -D@).
 --
 -- Modes: 1. print stats \/ 2. print maze with terminal escape code codes \/ 3. as 2., but with clear-screen before \/
@@ -505,8 +484,7 @@ traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
 
     perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
     ratio = (fromIntegral iter / fromIntegral depth :: Double)
-    (i, is) = islandCounts progress
-    solvedStr = printf "\x1b[2Kislands: %2i/%2i, solved: %02.2f%%, ratio: %0.2f\x1b[1A" i is perc ratio
+    solvedStr = printf "\x1b[2Ksolved: %02.2f%%, ratio: %0.2f\x1b[1A" perc ratio
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
     traceStr = renderWithPositions (Just current) progress
@@ -559,10 +537,6 @@ pixDirections b = foldMap (\n -> if b `Bit.testBit` n then [n] else []) [0, 1, 2
 {-# INLINE pixNDirections #-}
 pixNDirections :: Bit.Bits p => p -> [Direction]
 pixNDirections b = foldMap (\n -> if b `Bit.testBit` n then [] else [n]) [0, 1, 2, 3]
-
-{-# INLINE choiceCount #-}
-choiceCount :: Bit.Bits p => p -> Int
-choiceCount b = getSum $ foldMap (\n -> Sum (if b `Bit.testBit` (n + choicesInvalid) then 0 else 1)) [0, 1, 2, 3]
 
 {-# INLINE directionsPix #-}
 directionsPix :: Integral i => [Direction] -> i
@@ -766,6 +740,7 @@ islandizeArea islands p = do
   where reduceM a l f = foldrM f a l
 
 islandChoices :: MMaze -> Progress -> Island -> SolverT Island
+islandChoices _ Progress{components=Components _} _ = error "not enough info, unlikely"
 islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{iBounds} = do
   liftIO (MV.unsafeCopy (board maze') (board maze))
   pi <- toSolverT (islandProgress i maze')
@@ -778,10 +753,12 @@ islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{i
     _compDiff = on IntSet.difference IntMap.keysSet
 
     _nodes :: Progress -> IO [[PartId]]
+    _nodes Progress{components=Components _} = error "not enough info, unlikely"
     _nodes Progress{maze, components=Components' compJoin} =
       fmap (map (map snd) . groupSortOn fst) . traverse (\p -> (, p) <$> partEquate maze p) $
         IntSet.toList (_compDiff compInit compJoin)
 
+    islandProgress Island{iConts=[]} _ = error "impossible because iConts is result of `group'"
     islandProgress Island{iConts=(Continue{cursor}:_)} maze =
       prioritizeContinue (p { maze, space = [], unwinds = [] }) cursor (set islandL 2 . fromJust)
 
@@ -808,42 +785,6 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
     fillNextSolved continues _ cur@(x, y) _ deltasWall = do
       when ((x + y * width) `IntMap.member` continues) $ State.modify (Set.insert cur)
       pure . map (mazeDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
-
-{--- Island potential connectivity graphing ---}
-
-graphIslands :: Progress -> IO (Gr Island String)
-graphIslands Progress{components=Components _} = pure (mkGraph [] [])
-graphIslands p@Progress{maze, components=Components' components} = do
-  (islands, embedCursor) <- bimap id (IntMap.!) <$> islands p
-  let
-    nodes = map (\island@Island{iId} -> (iId, island)) islands
-    connectedIslands island Continue{cursor, origin} =
-      nubOrd . filter (/= island) . map embedCursor . filter (/= cursor)
-      . foldMap IntSet.toList . (`IntMap.lookup` components) <$> partEquate maze origin
-    islandContinues = islands >>= \Island{iId, iConts} -> (iId, ) <$> iConts
-    edges = for islandContinues (\(id, continue) -> map ((id, , "")) <$> connectedIslands id continue)
-  graph <- mkGraph nodes . join <$> edges
-  pure (nmap (\i@Island{iId} -> i { iAp = iId `elem` (ap graph) }) graph)
-
-previewIslands :: Progress -> IO Progress
-previewIslands p = (p <$) . forkIO . void $ do
-  graph <- graphToDot params { isDirected = False } <$> graphIslands p
-  runGraphvizCanvas Neato graph Xlib
-  runGraphvizCommand Neato graph DotOutput "images/graph.dot"
-  where
-    params = nonClusteredParams { fmtNode = \(_, Island{iSize, iAp}) ->
-      [ Shape PointShape
-      , Width (log (1.1 + (fromIntegral iSize) / 500))
-      , NodeSep 0.01
-      , Sep (PVal (createPoint 10 10))
-      -- , Overlap ScaleXYOverlaps
-      -- , Overlap VoronoiOverlap
-      , Overlap (PrismOverlap (Just 4000))
-      , LWidth 1000
-      , Splines SplineEdges
-      , Color [WC (if iAp then RGB 66 135 245 else RGB 252 160 18) Nothing]
-      ]
-    }
 
 {--- Backtracking solver ---}
 
