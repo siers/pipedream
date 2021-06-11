@@ -1,20 +1,31 @@
 with (import <nixpkgs> {});
 
 let
-  ghc = haskell.packages.ghc884.ghcWithPackages (packages: with packages; [
+  haskellPackages' =
+    (haskell.packages.ghc884.override {
+      all-cabal-hashes = pkgs.fetchurl {
+        url = "https://github.com/commercialhaskell/all-cabal-hashes/archive/12206435934e53eeda06b73e93bdee29a0ff713b.tar.gz";
+        sha256 = "0d3xis5mli5yskvyxiqr3z7gzvnnm22zrm6dlcpbj4mdqrp2rh10";
+      };
+    }).extend (self: super: {
+      pomaps = self.callHackage "pomaps" "0.2.0.1" {};
+    });
+
+  ghc = haskellPackages'.ghcWithPackages (packages: with packages; [
+  # ghc = haskell.packages.ghc884.ghcWithPackages (packages: with packages; [
     aeson
     base
     bytestring
     containers
     extra
     fgl
-    graphviz
     hip
+    lattices
     lens
     mtl
     network
-    parallel
     parallel-io
+    pomaps
     primitive
     text
     transformers

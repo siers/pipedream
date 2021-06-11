@@ -18,13 +18,13 @@ executable solve
     , containers
     , extra
     , fgl
-    , graphviz
     , hip
+    , lattices
     , lens
     , mtl
     , network
-    , parallel
     , parallel-io
+    , pomaps
     , primitive
     , template-haskell
     , text
