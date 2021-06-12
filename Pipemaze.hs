@@ -84,7 +84,6 @@ import Data.Function (on)
 import Data.Functor.Identity (Identity(..), runIdentity)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
-import qualified Data.List as List
 import Data.List.Extra (nubOrd, groupSort, groupSortOn, minimumOn)
 import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
@@ -92,9 +91,10 @@ import Data.Monoid (Sum(..))
 import Data.Set (Set)
 import Data.Traversable (for)
 import Data.Tuple (swap)
-import Data.Vector.Mutable (MVector)
+import Data.Vector.Storable.Mutable (IOVector)
 import Data.Word (Word8)
 -- import Debug.Trace (trace)
+import Foreign.Storable.Generic
 import Graphics.Image.Interface (thaw, MImage, freeze, write)
 import Graphics.Image (writeImage, makeImageR, Pixel(..), toPixelRGB, VU(..), RGB)
 import Numeric (showHex)
@@ -102,11 +102,12 @@ import qualified Control.Monad.Trans.State.Strict as State
 import qualified Data.Bits as Bit
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.IntSet as IntSet
+import qualified Data.List as List
 import qualified Data.Map.Strict as Map
 import qualified Data.POSet as POSet
 import qualified Data.Set as Set
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
+import qualified Data.Vector.Storable as V
+import qualified Data.Vector.Storable.Mutable as MV
 import System.Environment (lookupEnv, getArgs)
 import Text.Printf (printf)
 
@@ -148,13 +149,13 @@ type Cursor = (Int, Int)
 type Fursor = Int
 
 -- | unlawful instance
-instance Eq (MVector RealWorld Piece) where _ == _ = True
+instance Eq (IOVector Piece) where _ == _ = True
 -- | unlawful instance
-instance Ord (MVector RealWorld Piece) where _ <= _ = True
+instance Ord (IOVector Piece) where _ <= _ = True
 
 -- | Mutable maze operated on by functions in section /"Maze operations"/
 data MMaze = MMaze
-  { board :: MVector RealWorld Piece -- ^ flat MVector with implied 2d structure via 'Cursor'/'Fursor' + index computations
+  { board :: IOVector Piece -- ^ flat MVector with implied 2d structure via 'Cursor'/'Fursor' + index computations
   , width :: Int
   , height :: Int
   , size :: Int
@@ -169,9 +170,10 @@ data Piece = Piece
   , solved :: Bool
   , partId :: PartId -- ^ meaningless if not connected
   , connected :: Bool -- ^ connected when pointed to by a 'solved' piece
-  , wasIsland :: Bool -- ^ was this solved by an island 'Continue'?
   , initChoices :: Choices
   } deriving (Show, Eq, Ord, Generic)
+
+instance GStorable Piece
 
 -- | 'Choices' is bit-packed info related to the valid rotations of a picce.
 -- In MSB order: (valid) rotation count 2b, invalid rotation directions 4b, solved requirements 4b, solved neighbours 4b
@@ -207,11 +209,8 @@ data Components
   | Components' (IntMap IntSet)
   deriving (Show, Eq, Ord, Generic)
 
--- | For backtracking on the mutable 'MMaze' and for extracting hints
-data Unwind = UnSolve Fursor Pix Piece | UnEquate Fursor Piece deriving (Show, Eq, Ord)
-
-unwindTuple (UnSolve c _ p) = (c, p)
-unwindTuple (UnEquate c p) = (c, p)
+-- | For backtracking on the mutable 'MMaze' and for extracting hints.
+data Unwind = UnSolve Fursor Pix Pix | UnEquate Fursor Bool PartId deriving (Show, Eq, Ord)
 
 unHints (UnSolve c hint _piece) = [(c, hint)]
 unHints _ = []
@@ -325,7 +324,7 @@ parse input = do
     mazeId = showHex (foldr (\a b -> (ord a + b) `mod` (2 ^ 16)) 0 input) ""
     rect :: [[Pix]] = filter (not . null) . map (map toPix) . lines $ input
     board = map piece . zip [0..] . join $ rect
-    piece (fc, p) = (fc, Piece p False fc False False 0)
+    piece (fc, p) = (fc, Piece p False fc False 0)
 
     (width, height) = (length (head rect), (length rect))
     size = width * height
@@ -353,7 +352,7 @@ mazeBounded MMaze{width, height} c = mazeBounded' width height c
 mazeBounded' :: Int -> Int -> Cursor -> Bool
 mazeBounded' width height (!x, !y) = x >= 0 && y >= 0 && width > x && height > y
 
-vectorLists :: Int -> Int -> V.Vector a -> [[a]]
+vectorLists :: Storable a => Int -> Int -> V.Vector a -> [[a]]
 vectorLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
 {-# INLINE mazeCursor #-}
@@ -376,9 +375,11 @@ mazeClone :: MonadIO m => MMaze -> m MMaze
 mazeClone = liftIO . boardL MV.clone
 
 {-# INLINE mazeSolve #-}
-mazeSolve :: MonadIO m => MMaze -> Continue -> m ()
-mazeSolve m Continue{char, cursor, island} =
-  mazeModify m (\p -> p { pipe = char, solved = True, wasIsland = if island > 0 then True else False }) cursor
+mazeSolve :: MonadIO m => MMaze -> Continue -> m Unwind
+mazeSolve MMaze{board} Continue{char=after, cursor} = do
+  p@Piece{pipe=before} <- liftIO (MV.unsafeRead board cursor)
+  liftIO $ MV.unsafeWrite board cursor p { pipe = after, solved = True }
+  pure (UnSolve cursor after before)
 
 {-# INLINE mazeDelta #-}
 mazeDelta :: Cursor -> Direction -> Cursor
@@ -404,18 +405,22 @@ mazeDeltaWall :: MMaze -> Cursor -> Direction -> IO (Piece, Direction)
 mazeDeltaWall m@MMaze{width} c dir =
   if mazeBounded m delta
   then (, dir) <$> mazeRead m (x + y * width)
-  else pure (Piece 0 True 0 True False 0, dir)
+  else pure (Piece 0 True 0 True 0, dir)
   where delta@(x, y) = mazeDelta c dir
 
 {-# INLINE mazeEquate #-}
 -- | Connects 'PartId's on the board
-mazeEquate :: MonadIO m => MMaze -> PartId -> [Fursor] -> m ()
-mazeEquate m partId cursors = liftIO $
-  void (traverse (mazeModify m (\p -> p { partId, connected = True })) cursors)
+mazeEquate :: MonadIO m => MMaze -> PartId -> [Fursor] -> m [Unwind]
+mazeEquate MMaze{board} partId cursors = liftIO $
+  for cursors $ \cursor -> do
+    p@Piece{connected=connected_, partId=partId_} <- liftIO (MV.unsafeRead board cursor)
+    liftIO $ MV.unsafeWrite board cursor p { partId, connected = True }
+    pure (UnEquate cursor connected_ partId_)
 
 {-# INLINE mazePop #-}
-mazePop :: MonadIO m => MMaze -> [Unwind] -> m ()
-mazePop m = traverse_ (uncurry (flip (mazeModify m . const)) . unwindTuple)
+mazePop :: MonadIO m => MMaze -> Unwind -> m ()
+mazePop m (UnSolve c _ pipe) = mazeModify m (\p -> p { pipe, solved = False }) c
+mazePop m (UnEquate c connected partId) = mazeModify m (\p -> p { partId, connected }) c
 
 -- | Looks up the fixed point of 'PartId' (i.e. when it points to itself)
 {-# INLINE partEquate #-}
@@ -466,11 +471,12 @@ renderImage' name p@Progress{maze=maze@MMaze{sizeLen, level, mazeId}, iter, cont
     renderImage (printf ("images/lvl%i-%s-%0*i-%s.png") level mazeId sizeLen iter name) maze continues
 
 renderWithPositions :: MonadIO m => Maybe Continue -> Progress -> m String
-renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $
-  pure . unlines . map concat . vectorLists width height =<< V.imapM fmt . V.convert =<< V.freeze board
+renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $ do
+  lines <- vectorLists width height . V.convert <$> V.freeze board
+  pure . unlines . map concat =<< traverse (traverse fmt) lines
   where
     colorHash = (`mod` 70) . (+15) . (\(x, y) -> x * 67 + y * 23)
-    fmt _ Piece{pipe, partId, solved} = do
+    fmt Piece{pipe, partId, solved} = do
       color <- mfilter (\_ -> solved) . Just . colorHash . mazeCursor width <$> partEquate maze partId
       pure $ case color of
         Just color -> printf "\x1b[38;5;%im%c\x1b[39m" ([24 :: Int, 27..231] !! color) (toChar pipe)
@@ -480,8 +486,8 @@ render :: MonadIO m => MMaze -> m ()
 render = liftIO . (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] []
 
 renderStr :: MMaze -> IO String
-renderStr MMaze{board, width, height} = do
-  unlines . map concat . vectorLists width height . V.map (return . toChar . pipe) . V.convert
+renderStr MMaze{board, width, height} =
+  unlines . map concat . map (map (return . toChar . pipe)) . vectorLists width height . V.convert
   <$> V.freeze board
 
 -- | Tracing with at each @F\REQ@th step via @T\RACE@ (both compile-time variables, use with with @ghc -D@).
@@ -616,9 +622,11 @@ forceChoice forced pix choices =
     + (Bit.shiftL 1 choicesCount)
     + (Bit.shiftL (0b1111 `Bit.xor` Bit.bit rotatation) choicesInvalid)
 
+{-# INLINE forcePiece #-}
 forcePiece :: Pix -> Piece -> Piece
 forcePiece dst p@Piece{pipe=src} = (initChoicesL %~ forceChoice dst src) p
 
+{-# INLINE forceContinue #-}
 forceContinue :: Pix -> Continue -> Continue
 forceContinue dst c@Continue{char=src} = (choicesL %~ forceChoice dst src) c
 
@@ -859,18 +867,16 @@ solveContinue :: Progress -> Continue -> SolverT Progress
 solveContinue
   progress@Progress{maze=maze@MMaze{width}, components = components_}
   continue@Continue{cursor, char, origin = origin_} = do
-    unwindThis <- pure . UnSolve cursor char <$> mazeRead maze cursor
-    mazeSolve maze continue
+    unwindThis <- mazeSolve maze continue
     thisPart <- partEquate maze origin_
     let directDeltas = map (mazeFDelta width cursor) $ pixDirections char
     neighbours <- fmap (nubOrd . (thisPart :)) . traverse (partEquate maze) $ directDeltas
     let origin = minimum neighbours
-    let components = compEquate origin (filter (/= origin) (neighbours)) (compRemove thisPart cursor components_)
-    unwindEquate <- traverse (\c -> UnEquate c <$> mazeRead maze c) neighbours
-    mazeEquate maze origin neighbours
+    let components = compEquate origin (filter (/= origin) neighbours) (compRemove thisPart cursor components_)
+    unwindEquate <- mazeEquate maze origin neighbours
 
     progress' <- prioritizeDeltas width progress { components } continue { origin }
-    traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindEquate ++ unwindThis) :)
+    traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindThis : unwindEquate) :)
 
 -- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
 -- This returns a progress with 'space' that always has an element or the maze isn't solvable
@@ -878,7 +884,8 @@ solveContinue
 backtrack :: MonadIO m => Progress -> m (Maybe (Progress, Continue))
 backtrack Progress{space=[]} = pure Nothing
 backtrack Progress{space=([]:_), unwinds=[]} = pure Nothing
-backtrack p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} = mazePop maze unwind >> backtrack p { space, unwinds }
+backtrack p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} =
+  traverse (mazePop maze) unwind >> backtrack p { space, unwinds }
 backtrack Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} = do
   pure (Just (p { maze, iter, unwinds, space = guesses : space }, continue))
 
@@ -1025,8 +1032,8 @@ rotateStr input solved = concatenate <$> rotations input solved
 
     rotations :: MMaze -> MMaze -> IO [(Cursor, Rotation)]
     rotations MMaze{width, board=input} MMaze{board=solved} = do
-      V.toList . V.imap (\i -> (mazeCursor width i, ) . uncurry (rotations `on` pipe))
-      <$> (V.zip <$> V.freeze input <*> V.freeze solved)
+      (as, bs) <- on (,) V.toList <$> V.freeze input <*> V.freeze solved
+      pure (map (\(idx, pa, pb) -> (mazeCursor width idx, on rotations pipe pa pb)) (zip3 [0..] as bs))
       where
         rotations from to = fromJust $ to `List.elemIndex` iterate (rotate 1) from
 

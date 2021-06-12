@@ -17,6 +17,7 @@ let
     base
     bytestring
     containers
+    derive-storable
     extra
     fgl
     hip
