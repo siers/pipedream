@@ -71,7 +71,7 @@ import Control.Lens.TH (DefName(..), lensRules)
 -- Solver
 import Algebra.PartialOrd (PartialOrd(..))
 import Control.Concurrent (getNumCapabilities)
-import Control.Lens (Setter', (&), (%~), set, _2)
+import Control.Lens (Setter', (&), (%~), set, _2, _head)
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad.IO.Class (MonadIO(..), liftIO)
 import Control.Monad (join, filterM, void, when, mfilter, liftM)
@@ -221,8 +221,7 @@ data Progress = Progress
   , priority :: Priority -- ^ priority queue for next guesses (tree, not a heap, because reprioritizing is required)
   , continues :: Continues -- ^ Primary continue store, pointed to by 'priority' (all 'Continue's within must be unique by their cursor)
   , components :: Components -- ^ component continue counts (for quickly computing disconnected components via `compAlive`)
-  , space :: [[(Continue, Progress)]] -- ^ unexplored solution stack, might help with parallelization; item per choice, per cursor. must be non-empty
-  , unwinds :: [[Unwind]] -- ^ backtracking's "rewind"; an item per a solve. pop when (last 'space' == [])
+  , space :: [([(Continue, Progress)], [Unwind])] -- ^ backtracking's "rewind" + unexplored solution stack; an item per a solve. pop when (last 'space' == [])
   , maze :: MMaze
   } deriving (Eq, Ord, Generic)
 
@@ -483,7 +482,7 @@ renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $
         _ -> (toChar pipe) : []
 
 render :: MonadIO m => MMaze -> m ()
-render = liftIO . (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] []
+render = liftIO . (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) []
 
 renderStr :: MMaze -> IO String
 renderStr MMaze{board, width, height} =
@@ -823,9 +822,9 @@ islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{i
 
     islandSolution :: MonadIO m => Progress -> m IslandSolution
     islandSolution Progress{components=Components _} = error "not enough info, unlikely"
-    islandSolution Progress{maze, components=comp@(Components' compJoin), unwinds} = do
+    islandSolution Progress{maze, components=comp@(Components' compJoin), space} = do
       compEquated <- traverse (\p -> (, p) <$> partEquate maze p) $ compDiff compInit compJoin
-      let hints = unHints =<< join unwinds
+      let hints = unHints =<< snd =<< space
       pure (IslandSolution (compParts compEquated) (compCounts comp) hints)
       where
         compDiff a b = IntSet.toList (on IntSet.difference IntMap.keysSet a b)
@@ -833,7 +832,7 @@ islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{i
 
     islandProgress _ Island{iConts=[]} _ = error "impossible because iConts is result of `group'"
     islandProgress p Island{iConts=(Continue{cursor}:_)} maze =
-      prioritizeContinue (p { maze, space = [], unwinds = [] }) cursor (set islandL 2 . fromJust)
+      prioritizeContinue (p { maze, space = [] }) cursor (set islandL 2 . fromJust)
 
 islands :: MonadIO m => Progress -> m ([Island], IntMap Int)
 islands Progress{maze=maze@MMaze{width}, continues} = do
@@ -875,19 +874,22 @@ solveContinue
     let components = compEquate origin (filter (/= origin) neighbours) (compRemove thisPart cursor components_)
     unwindEquate <- mazeEquate maze origin neighbours
 
-    progress' <- prioritizeDeltas width progress { components } continue { origin }
-    traceBoard continue $ progress' & iterL %~ (+1) & depthL %~ (+1) & unwindsL %~ ((unwindThis : unwindEquate) :)
+    traceBoard continue . (iterL %~ (+1)) . (depthL %~ (+1))
+      . (spaceL . _head %~ (, unwindThis : unwindEquate) . fst)
+      =<< prioritizeDeltas width progress { components } continue { origin }
 
 -- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
 -- This returns a progress with 'space' that always has an element or the maze isn't solvable
 -- (assuming the algo's correct and the stack hasn't been split for divide and conquer).
 backtrack :: MonadIO m => Progress -> m (Maybe (Progress, Continue))
 backtrack Progress{space=[]} = pure Nothing
-backtrack Progress{space=([]:_), unwinds=[]} = pure Nothing
-backtrack p@Progress{space=([]:space), unwinds=(unwind:unwinds), maze} =
-  traverse (mazePop maze) unwind >> backtrack p { space, unwinds }
-backtrack Progress{space=(((continue, p):guesses):space), maze, unwinds, iter} = do
-  pure (Just (p { maze, iter, unwinds, space = guesses : space }, continue))
+backtrack p@Progress{space=(([], []):space)} =
+  backtrack p { space }
+backtrack Progress{space=((((continue, p):guesses), []):space), maze, iter} = do
+  pure (Just (p { maze, iter, space = (guesses, []) : space }, continue))
+backtrack p@Progress{space=((guesses, unwind):space), maze} = do
+  traverse (mazePop maze) unwind
+  backtrack p { space = (guesses, []) : space }
 
 -- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
 solve' :: Progress -> SolverT (Maybe Progress)
@@ -895,13 +897,12 @@ solve' p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
 solve' progress@Progress{depth, maze=maze@MMaze{size}, components} = do
   Configuration{cLifespan} <- ask
   guesses <- liftIO . foldMap guesses . maybeToList =<< toSolverT (findContinue progress)
-  progress' <- backtrack . (spaceL %~ (guesses :)) =<< pure progress
+  progress' <- backtrack . (spaceL %~ ((guesses, []) :)) =<< pure progress
   progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
 
   unbounded <- null . join <$> toSolverT (traverse findContinue progress')
   let stop = depth == size - 1 || cLifespan == 0 || unbounded
-  withReaderT (cLifespanL %~ (subtract 1)) (pure ())
-  next stop progress'
+  withReaderT (cLifespanL %~ (subtract 1)) $ next stop progress'
   where
     next True = pure
     next False = fmap join . traverse solve'
@@ -940,7 +941,7 @@ solveDetParallel n m@MMaze{width} = do
     divideProgress :: MMaze -> SolverT [(Int, Progress)]
     divideProgress m@MMaze{width, trivials} =
       let
-        p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] [] m
+        p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] m
         continue (i, c) = (\Piece{pipe, initChoices} -> (c, return (Continue c pipe c 0 (-i) 0 0 initChoices))) <$> mazeRead m c
         quad = mazeQuadrant m
       in do
@@ -979,7 +980,7 @@ solveTrivialIslands copy is p@Progress{maze} = solveT =<< determinstically (toSo
 initProgress :: MMaze -> SolverT Progress
 initProgress m@MMaze{trivials} =
   let
-    p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] [] m
+    p = Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [] m
     continue (i, c) = (\Piece{pipe, initChoices} -> (c, return (Continue c pipe c 0 (-i) 0 0 initChoices))) <$> mazeRead m c
   in toSolverT . prioritizeContinues p =<< traverse continue (zip [0..] trivials)
 
