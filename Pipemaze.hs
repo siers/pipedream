@@ -260,7 +260,7 @@ data Island = Island
   , iBounds :: IntSet
   , iSolutions :: [IslandSolution]
   -- ^ all possible combinations (partitioned by partition equivalence), with hints to force solver choose that solve
-  , iChoicesN :: Int -- ^ same, but without details
+  , iChoices :: Int -- ^ same, but without details
   } deriving (Show, Eq, Ord, Generic)
 
 -- | IslandSolution represent a solution for an island with a representative progress.
@@ -270,12 +270,11 @@ data IslandSolution = IslandSolution
   { icConnections :: [Set PartId] -- the surrounding 'PartId' partition (induces a PartialOrd)
   , icComponents :: IntMap Int
   , icHints :: [(Fursor, Pix)] -- ^ forces the backtracker choose solution
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic)
 
 instance PartialOrd IslandSolution where
   IslandSolution{icConnections=as} `leq` IslandSolution{icConnections=bs} =
-    -- all (\a -> any (\b -> a `Set.isSubsetOf` b) bs) as
-    all (flip any bs . Set.isSubsetOf) as -- should be equivalent
+    all (flip any bs . Set.isSubsetOf) as
 
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''MMaze
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Piece
@@ -305,7 +304,9 @@ instance Show MMaze where
 instance ToJSON Piece
 instance ToJSON Continue
 instance ToJSON Components
--- instance ToJSON Island
+instance ToJSON Island
+instance ToJSON IslandSolution
+-- writeFile "out" . LBS.unpack . Aeson.encode . toJSON $ solutions
 
 -- | https://hackage.haskell.org/package/monad-extras-0.6.0/docs/src/Control-Monad-Extra.html#iterateMaybeM
 -- | Monadic equivalent to 'iterate', which uses Maybe to know when to terminate.
@@ -616,10 +617,10 @@ forceChoice forced pix choices =
     + (Bit.shiftL (0b1111 `Bit.xor` Bit.bit rotatation) choicesInvalid)
 
 forcePiece :: Pix -> Piece -> Piece
-forcePiece pix p@Piece{pipe=pix'} = (initChoicesL %~ forceChoice pix pix') p
+forcePiece dst p@Piece{pipe=src} = (initChoicesL %~ forceChoice dst src) p
 
-forceContinue :: Pix -> Pix -> Continue -> Continue
-forceContinue pix pix' c = (choicesL %~ forceChoice pix pix') c
+forceContinue :: Pix -> Continue -> Continue
+forceContinue dst c@Continue{char=src} = (choicesL %~ forceChoice dst src) c
 
 {--- Solver bits: components ---}
 
@@ -778,19 +779,15 @@ islandize p@Progress{continues} = toSolverT $ do
 
 islandHinting :: [Island] -> Progress -> SolverT Progress
 islandHinting islands p@Progress{maze, continues} = do
-  reduceM p islands $ \_i@Island{iConts, iSolutions, iChoicesN} p -> do
+  reduceM p islands $ \_i@Island{iConts, iSolutions, iChoices} p -> do
     let Continue{cursor} = minimumOn score iConts
-    p <- toSolverT (prioritizeContinue p cursor (set areaL iChoicesN . set islandL 1 . fromJust))
-
-    -- for (unique iSolutions) $ \IslandSolution{icHints} -> liftIO $ print ((iSize == length icHints))
+    p <- toSolverT (prioritizeContinue p cursor (set areaL iChoices . set islandL 1 . fromJust))
 
     reduceM p (unique iSolutions) $ \IslandSolution{icHints=hints} p -> do
       reduceM p hints $ \(c, pix) p -> do
-        mazeModify maze (forcePiece pix) c
-        Piece{pipe=pix'} <- mazeRead maze c
         if IntMap.member c continues
-        then toSolverT (prioritizeContinue p c (forceContinue pix pix' . fromJust))
-        else pure p
+        then toSolverT (prioritizeContinue p c (forceContinue pix . fromJust))
+        else p <$ mazeModify maze (forcePiece pix) c
   where
     reduceM a l f = foldrM f a l
 
@@ -798,15 +795,15 @@ islandHinting islands p@Progress{maze, continues} = do
     unique (a:[])  = Just a
     unique (_:_:_) = Nothing
 
--- ^ Computes and set 'iChoices' for the island, but also modifies maze with 'icHints' if len choices == 1.
+-- ^ Computes and set 'iChoices'/'iSolutions' for the island, but also modifies maze with 'icHints' if len choices == 1.
 islandChoices :: MMaze -> Progress -> Island -> SolverT Island
 islandChoices _ Progress{components=Components _} _ = error "not enough info, unlikely"
 islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{iBounds} = do
   liftIO (MV.unsafeCopy (board maze') (board maze)) -- this copies much more than it needs to
-  pi <- toSolverT (islandProgress i maze')
-  !solutions <- connectivityRefinement . join . map snd <$> iterateMaybeM 1000 (solution . fst) (pi, [])
+  !solutions <- iterateMaybeM 1000 (solution . fst) . (, []) =<< toSolverT (islandProgress p i maze')
+  !solutions <- connectivityRefinement . join . map snd <$> pure solutions
 
-  pure (i & set iChoicesNL (length solutions) & set iSolutionsL solutions)
+  pure (i & set iChoicesL (length solutions) & set iSolutionsL solutions)
   where
     constrain c = c { cLifespan = (-1), cBounds = Just (`IntSet.member` iBounds) }
 
@@ -814,9 +811,7 @@ islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{i
     solution p = withReaderT constrain (solve' p) >>= traverse (\p -> (p, ) . pure <$> islandSolution p)
 
     connectivityRefinement :: [IslandSolution] -> [IslandSolution]
-    connectivityRefinement =
-      -- POSet.lookupMax . POSet.fromList .
-      map head . groupSortOn icComponents
+    connectivityRefinement = POSet.lookupMax . POSet.fromList . map head . groupSortOn icComponents
 
     islandSolution :: MonadIO m => Progress -> m IslandSolution
     islandSolution Progress{components=Components _} = error "not enough info, unlikely"
@@ -826,10 +821,10 @@ islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{i
       pure (IslandSolution (compParts compEquated) (compCounts comp) hints)
       where
         compDiff a b = IntSet.toList (on IntSet.difference IntMap.keysSet a b)
-        compParts = map (Set.fromList . map snd) . groupSortOn fst
+        compParts = map (Set.fromList . uncurry (:)) . groupSort
 
-    islandProgress Island{iConts=[]} _ = error "impossible because iConts is result of `group'"
-    islandProgress Island{iConts=(Continue{cursor}:_)} maze =
+    islandProgress _ Island{iConts=[]} _ = error "impossible because iConts is result of `group'"
+    islandProgress p Island{iConts=(Continue{cursor}:_)} maze =
       prioritizeContinue (p { maze, space = [], unwinds = [] }) cursor (set islandL 2 . fromJust)
 
 islands :: MonadIO m => Progress -> m ([Island], IntMap Int)
@@ -961,15 +956,17 @@ solveDetParallel n m@MMaze{width} = do
             wrap = (n + qy) `div` qy -- wrap x = ceiling (n / q)
 
 solveTrivialIslands :: MMaze -> [Island] -> Progress -> SolverT Progress
+solveTrivialIslands _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
 solveTrivialIslands copy is p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
   where
     solveT Nothing = pure p
     solveT (Just _) = do
       conf <- ask
       solve <- fromJust <$> determinstically (solve' p)
-      -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoicesN $ is
+      -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
       let islandUnsolved = fmap (not . solved) . mazeRead maze . cursor . head . iConts
-      is <- liftIO (parallelInterleaved . map (flip runReaderT conf . (islandChoices copy p)) =<< filterM islandUnsolved is)
+      is <- liftIO (parallelInterleaved . map (flip runReaderT conf . (islandChoices copy solve)) =<< filterM islandUnsolved is)
+      -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
       solveTrivialIslands copy [] =<< islandHinting is solve
 
 initProgress :: MMaze -> SolverT Progress
