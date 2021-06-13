@@ -2,6 +2,8 @@
 
 {-# LANGUAGE StrictData, BangPatterns #-}
 {-# OPTIONS_GHC -O #-}
+{-# OPTIONS_GHC -fexpose-all-unfoldings #-} -- no observable effect from these
+{-# OPTIONS_GHC -fspecialise-aggressively #-} -- no observable effect from these
 
 {-# LANGUAGE RankNTypes #-} -- for maybeSet
 
