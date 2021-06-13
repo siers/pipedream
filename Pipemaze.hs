@@ -1065,7 +1065,7 @@ solveFile file = do
     set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure confDefault
 
   solved <- runReaderT (solve =<< liftIO (parse =<< readFile file)) conf
-  verified <- if bench then verify solved else pure True
+  verified <- if bench then pure True else verify solved
   when (not verified) (putStrLn "solution invalid")
 
   where
