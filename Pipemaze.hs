@@ -71,7 +71,7 @@ import Control.Lens.TH (DefName(..), lensRules)
 -- Solver
 import Algebra.PartialOrd (PartialOrd(..))
 import Control.Concurrent (getNumCapabilities)
-import Control.Lens (Setter', (&), (%~), set, _2, _head)
+import Control.Lens (Setter', (&), (%~), set, _1, _2, _head, _Just)
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad.IO.Class (MonadIO(..), liftIO)
 import Control.Monad (join, filterM, void, when, mfilter, liftM)
@@ -84,7 +84,7 @@ import Data.Function (on)
 import Data.Functor.Identity (Identity(..), runIdentity)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
-import Data.List.Extra (nubOrd, groupSort, groupSortOn, minimumOn)
+import Data.List.Extra (nubOrd, groupSort, groupSortOn)
 import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
 import Data.Monoid (Sum(..))
@@ -237,13 +237,14 @@ type Bounds = Maybe (Fursor -> Bool)
 bounded :: Bounds -> Fursor -> Bool
 bounded b c = all ($ c) b
 
+data SolveMode = SolveNormal | SolveDeterministic | SolveParallel deriving (Show, Eq, Ord)
+
 data Configuration = Configuration
   { cDebug :: Int
   , cDebugFreq :: Int
   , cLifespan :: Int
-  , cDeterministic :: Bool
+  , cMode :: SolveMode
   , cBounds :: Bounds
-  , cParallel :: Bool -- this will make unbounded continues to be prioritized to the end
   , cBench :: Bool
   } -- deriving (Show, Eq, Ord, Generic)
 
@@ -282,15 +283,14 @@ makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (+
 makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Island
 
 toSolverT = mapReaderT (pure . runIdentity)
-determinstically = withReaderT (set cDeterministicL True)
+determinstically = withReaderT (set cModeL SolveDeterministic)
 
 confDefault = Configuration
   { cDebug = 1
   , cDebugFreq = 4070
   , cLifespan = (-1)
-  , cDeterministic = False
+  , cMode = SolveNormal
   , cBounds = Nothing
-  , cParallel = False
   , cBench = False
   }
 
@@ -752,10 +752,10 @@ pieceDead maze components cur pix choices = do
 {-# INLINE findContinue #-}
 findContinue :: Progress -> Solver (Maybe Continue)
 findContinue Progress{priority, continues} = do
-  ReaderT $ \Configuration{cDeterministic=det, cBounds} -> Identity $ do
+  ReaderT $ \Configuration{cMode, cBounds} -> Identity $ do
     cursor <- mfilter (bounded cBounds) (snd <$> IntMap.lookupMin priority)
     mfilter
-      (\Continue{choices, area} -> not det || (2 > Bit.shiftR choices choicesCount) || area == 1)
+      (\Continue{choices} -> cMode == SolveNormal || (2 > Bit.shiftR choices choicesCount))
       (cursor `IntMap.lookup` continues)
 
 popContinue :: Progress -> Progress
@@ -786,10 +786,7 @@ islandize p@Progress{continues} = toSolverT $ do
 
 islandHinting :: [Island] -> Progress -> SolverT Progress
 islandHinting islands p@Progress{maze, continues} = do
-  reduceM p islands $ \_i@Island{iConts, iSolutions, iChoices} p -> do
-    let Continue{cursor} = minimumOn score iConts
-    p <- toSolverT (prioritizeContinue p cursor (set areaL iChoices . set islandL 1 . fromJust))
-
+  reduceM p islands $ \_i@Island{iSolutions} p -> do
     reduceM p (unique iSolutions) $ \IslandSolution{icHints=hints} p -> do
       reduceM p hints $ \(c, pix) p -> do
         if IntMap.member c continues
@@ -895,20 +892,21 @@ backtrack p@Progress{space=((guesses, unwind):space), maze} = do
 solve' :: Progress -> SolverT (Maybe Progress)
 solve' p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
 solve' progress@Progress{depth, maze=maze@MMaze{size}, components} = do
-  Configuration{cLifespan} <- ask
-  guesses <- liftIO . foldMap guesses . maybeToList =<< toSolverT (findContinue progress)
-  progress' <- backtrack . (spaceL %~ ((guesses, []) :)) =<< pure progress
-  progress' <- traverse (uncurry (solveContinue . popContinue)) progress'
+  Configuration{cLifespan, cMode} <- ask
+  guesses <- liftIO . foldMap (guesses progress) . maybeToList =<< toSolverT (findContinue progress)
+  guess <- backtrack . (spaceL %~ ((guesses, []) :)) =<< pure progress
+  guess <- pure $ guess & _Just . _1 . spaceL %~ (if cMode == SolveNormal then id else init)
+  progress <- traverse (uncurry (solveContinue . popContinue)) guess
 
-  unbounded <- null . join <$> toSolverT (traverse findContinue progress')
+  unbounded <- null . join <$> toSolverT (traverse findContinue progress)
   let stop = depth == size - 1 || cLifespan == 0 || unbounded
-  withReaderT (cLifespanL %~ (subtract 1)) $ next stop progress'
+  withReaderT (cLifespanL %~ (subtract 1)) $ next stop progress
   where
     next True = pure
     next False = fmap join . traverse solve'
 
-    guesses :: MonadIO m => Continue -> m [(Continue, Progress)]
-    guesses continue@Continue{cursor, char, choices} = do
+    guesses :: MonadIO m => Progress -> Continue -> m [(Continue, Progress)]
+    guesses progress continue@Continue{cursor, char, choices} = do
       let rotations = pixNDirections (Bit.shiftR choices choicesInvalid)
       rotations <- filterDisconnected (map (\r -> (cursor, rotate r char, choices)) rotations)
       pure (map (\(_, pipe, _) -> (set charL pipe continue, progress)) rotations)
@@ -936,7 +934,9 @@ solveDetParallel n m@MMaze{width} = do
   where
     solvePar conf = (\(n, p) -> fromJust <$> runReaderT (solve' p) (configuration conf n))
     progressExtract Progress{iter, continues} = (Sum iter, IntMap.toList continues)
-    configuration c n = c { cBounds = Just (\f -> mazeQuadrant m (mazeCursor width f) == n), cParallel = True }
+    configuration c n = c
+      { cBounds = Just (\f -> mazeQuadrant m (mazeCursor width f) == n)
+      , cMode = SolveParallel }
 
     divideProgress :: MMaze -> SolverT [(Int, Progress)]
     divideProgress m@MMaze{width, trivials} =
