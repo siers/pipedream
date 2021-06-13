@@ -212,10 +212,15 @@ data Components
   deriving (Show, Eq, Ord, Generic)
 
 -- | For backtracking on the mutable 'MMaze' and for extracting hints.
-data Unwind = UnSolve Fursor Pix Pix | UnEquate Fursor Bool PartId deriving (Show, Eq, Ord)
+data Unwind
+  = UnSolve Fursor Pix Pix PartId -- ^ 'Pix' before, after, 'PartId' before
+  | UnEquate Fursor Bool PartId PartId -- ^ 'connected'/'PartId' before, 'PartId' after
+  deriving (Show, Eq, Ord, Generic)
 
-unHints (UnSolve c hint _piece) = [(c, hint)]
-unHints _ = []
+unHint us@(UnSolve _ _ _ _) = [us]
+unHint _ = []
+
+unHints space = unHint =<< snd =<< space
 
 data Progress = Progress
   { iter :: Int -- ^ the total number of backtracking iterations (incl. failed ones)
@@ -270,7 +275,7 @@ data IslandSolution = IslandSolution
   -- { icProgess :: Progress
   { icConnections :: [Set PartId] -- the surrounding 'PartId' partition (induces a PartialOrd)
   , icComponents :: IntMap Int
-  , icHints :: [(Fursor, Pix)] -- ^ forces the backtracker choose solution
+  , icHints :: [Unwind] -- ^ forces the backtracker choose solution
   } deriving (Show, Eq, Ord, Generic)
 
 instance PartialOrd IslandSolution where
@@ -305,6 +310,7 @@ instance ToJSON Piece
 instance ToJSON Continue
 instance ToJSON Components
 instance ToJSON Island
+instance ToJSON Unwind
 instance ToJSON IslandSolution
 -- writeFile "out" . LBS.unpack . Aeson.encode . toJSON $ solutions
 
@@ -376,11 +382,11 @@ mazeClone :: MonadIO m => MMaze -> m MMaze
 mazeClone = liftIO . boardL MV.clone
 
 {-# INLINE mazeSolve #-}
-mazeSolve :: MonadIO m => MMaze -> Continue -> m Unwind
-mazeSolve MMaze{board} Continue{char=after, cursor} = do
+mazeSolve :: MonadIO m => MMaze -> Continue -> PartId -> m Unwind
+mazeSolve MMaze{board} Continue{char=after, cursor} partId = do
   p@Piece{pipe=before} <- liftIO (MV.unsafeRead board cursor)
   liftIO $ MV.unsafeWrite board cursor p { pipe = after, solved = True }
-  pure (UnSolve cursor after before)
+  pure (UnSolve cursor before after partId)
 
 {-# INLINE mazeDelta #-}
 mazeDelta :: Cursor -> Direction -> Cursor
@@ -416,12 +422,12 @@ mazeEquate MMaze{board} partId cursors = liftIO $
   for cursors $ \cursor -> do
     p@Piece{connected=connected_, partId=partId_} <- liftIO (MV.unsafeRead board cursor)
     liftIO $ MV.unsafeWrite board cursor p { partId, connected = True }
-    pure (UnEquate cursor connected_ partId_)
+    pure (UnEquate cursor connected_ partId_ partId)
 
 {-# INLINE mazePop #-}
 mazePop :: MonadIO m => MMaze -> Unwind -> m ()
-mazePop m (UnSolve c _ pipe) = mazeModify m (\p -> p { pipe, solved = False }) c
-mazePop m (UnEquate c connected partId) = mazeModify m (\p -> p { partId, connected }) c
+mazePop m (UnSolve c pipe _ _) = mazeModify m (\p -> p { pipe, solved = False }) c
+mazePop m (UnEquate c connected partId _) = mazeModify m (\p -> p { partId, connected }) c
 
 -- | Looks up the fixed point of 'PartId' (i.e. when it points to itself)
 {-# INLINE partEquate #-}
@@ -790,16 +796,18 @@ islandHinting :: [Island] -> Progress -> SolverT Progress
 islandHinting islands p@Progress{maze, continues} = do
   reduceM p islands $ \_i@Island{iSolutions} p -> do
     reduceM p (unique iSolutions) $ \IslandSolution{icHints=hints} p -> do
-      reduceM p hints $ \(c, pix) p -> do
-        if IntMap.member c continues
-        then toSolverT (prioritizeContinue p c (forceContinue pix . fromJust))
-        else p <$ mazeModify maze (forcePiece pix) c
+      reduceM p hints $ deployHint
   where
     reduceM a l f = foldrM f a l
 
     unique []      = Nothing
     unique (a:[])  = Just a
     unique (_:_:_) = Nothing
+
+    deployHint (UnSolve c _ pix _) p =
+      if IntMap.member c continues
+      then toSolverT (prioritizeContinue p c (forceContinue pix . fromJust))
+      else p <$ mazeModify maze (forcePiece pix) c
 
 -- ^ Computes and set 'iChoices'/'iSolutions' for the island, but also modifies maze with 'icHints' if len choices == 1.
 islandChoices :: MMaze -> Progress -> Island -> SolverT Island
@@ -823,8 +831,7 @@ islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{i
     islandSolution Progress{components=Components _} = error "not enough info, unlikely"
     islandSolution Progress{maze, components=comp@(Components' compJoin), space} = do
       compEquated <- traverse (\p -> (, p) <$> partEquate maze p) $ compDiff compInit compJoin
-      let hints = unHints =<< snd =<< space
-      pure (IslandSolution (compParts compEquated) (compCounts comp) hints)
+      pure (IslandSolution (compParts compEquated) (compCounts comp) (unHints space))
       where
         compDiff a b = IntSet.toList (on IntSet.difference IntMap.keysSet a b)
         compParts = map (Set.fromList . uncurry (:)) . groupSort
@@ -865,8 +872,8 @@ solveContinue :: Progress -> Continue -> SolverT Progress
 solveContinue
   progress@Progress{maze=maze@MMaze{width}, components = components_}
   continue@Continue{cursor, char, origin = origin_} = do
-    unwindThis <- mazeSolve maze continue
     thisPart <- partEquate maze origin_
+    unwindThis <- mazeSolve maze continue thisPart
     let directDeltas = map (mazeFDelta width cursor) $ pixDirections char
     neighbours <- fmap (nubOrd . (thisPart :)) . traverse (partEquate maze) $ directDeltas
     let origin = minimum neighbours
