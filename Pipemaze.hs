@@ -244,7 +244,15 @@ type Bounds = Maybe (Fursor -> Bool)
 bounded :: Bounds -> Fursor -> Bool
 bounded b c = all ($ c) b
 
-data SolveMode = SolveNormal | SolveDeterministic | SolveParallel deriving (Show, Eq, Ord)
+-- | Amalgamation of the flags "determinstic", "save history" and "deprioritize unbounded continues" (see 'rescoreContinue').
+data SolveMode = SolveNormal | SolveDeterministic | SolveIslandDeterministic | SolveParallel deriving (Show, Eq, Ord)
+
+solveDeterministic SolveNormal = True
+solveDeterministic _ = False
+
+solveWithHistory SolveNormal = True
+solveWithHistory SolveIslandDeterministic = False -- could be True if you plan to solve islands directly (reply unwinds)
+solveWithHistory _ = False
 
 data Configuration = Configuration
   { cDebug :: Int
@@ -291,6 +299,7 @@ makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (+
 
 toSolverT = mapReaderT (pure . runIdentity)
 determinstically = withReaderT (set cModeL SolveDeterministic)
+determinsticallyI = withReaderT (set cModeL SolveIslandDeterministic) -- for islands, see withHistory
 
 confDefault = Configuration
   { cDebug = 1
@@ -763,7 +772,7 @@ findContinue Progress{priority, continues} = do
   ReaderT $ \Configuration{cMode, cBounds} -> Identity $ do
     cursor <- mfilter (bounded cBounds) (snd <$> IntMap.lookupMin priority)
     mfilter
-      (\Continue{choices} -> cMode == SolveNormal || (2 > Bit.shiftR choices choicesCount))
+      (\Continue{choices} -> solveDeterministic cMode || (2 > Bit.shiftR choices choicesCount))
       (cursor `IntMap.lookup` continues)
 
 popContinue :: Progress -> Progress
@@ -979,7 +988,7 @@ solveTrivialIslands copy is p@Progress{maze} = solveT =<< determinstically (toSo
     solveT Nothing = pure p
     solveT (Just _) = do
       conf <- ask
-      solve <- fromJust <$> determinstically (solve' p)
+      (_space, solve) <- (spaceL ((,) =<< id)) . fromJust <$> determinsticallyI (solve' p)
       -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
       let islandUnsolved = fmap (not . solved) . mazeRead maze . cursor . head . iConts
       is <- liftIO (parallelInterleaved . map (flip runReaderT conf . (islandChoices copy solve)) =<< filterM islandUnsolved is)
