@@ -233,6 +233,44 @@ inoff() { sed -i '/INLINE/s/{-# INLINE/-- {-# INLINE/' Pipemaze.hs }
 • prikolīgi
   • Data.Aeson Progress instances, just to see how it looks after a few iterations (maybe make ProgressFrozen)
 
+2021-05-23-22:18:57
+• main algo updates:
+  ✗ breadth solving (hard and speed-up linear to N of processors)
+  ✔ make choice counts strict (leak)
+  ✔ reuse flooder
+  ✔ parallel deterministic solve (are they deterministic in sense that the begining doesn't matter?, A: yes)
+  ✔ parallel island computations
+  ✔ group island solutions by graph connectivity partition refinement
+  • combine solutions through component history
+  • recompute only necessary (by touched components)
+  • solve islands directly
+• simple optimizations
+  ✗ use trivial islands only for level 6 (no difference in bench)
+  ✗ see if component writing ops can be removed if id is in components (probably not worth it)
+  ✔ inlinable for solveContinue/backtrack
+  ✔ only one progressClone in islandChoices
+  ✔ unboxed/storable vectors
+  ✔ unify space with unwinds
+  ✔ deterministic modes
+  ✔ aggressive inlining flags
+• nice-ities
+  ✔ monad reader env for config
+  ✔ benchmarking mode with no images or maze verification
+  • image directories
+  • dynamic server URL (git-filter-branch), levels= env var
+  • rename area, make sure Piece/Continue names make sense, remove wasIsland(✔)
+  • fix parallelism
+• prepublish
+  ✔ fix warnings
+  ✔ fix nix/cabl files, check for unnecessary deps
+  • throw out all unnecessary code, update docs, get reviewed
+  • readme -fexternal-interpreter
+  • better maze downloading?
+  • sort functions by toposort call graph as much as possible
+  • check important trash files into repo
+• just ideas
+  ¬ I could also track old component IDs, so mazeEquate wouldn't be necessary sometimes
+
 -      let satu = if solved then 0.15 else (if isJust cont then 1 else 0)
 -      let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
 +      let satu = if solved then 1.0 else (if isJust cont then 0.5 else 0)
@@ -360,3 +398,18 @@ f3f02b2 [25s] prioritizeContinues: expose modify
 c55febf [25s] Use IntMap/Fursor for Continues
 23ffb80 [31s] bit-packed Choices with saved "next"
 9179cfd [39s] fix recursion guard
+
+git log --format=oneline -1 --no-decorate --abbrev-commit
+
+time bench=True ./solve trash/samples/{6..1}-01
+af516fa [6¾s] fix bench bool check, don't verify if bench=True
+486871f [09s] don't save space when solving determinstically (gc gains)
+d0192e4 [17s] unify space/unwinds
+9745182 [17s] Use Data.Vector.Storable.Mutable (AoS)
+15a8329 [20s] island connected component partition refinement (bug fix)
+290ed73 [21s] maze copypasting for islandChoices (completely breaks parallelism)
+c98633d [30s] Configuration with MonadReader, remove compile conf flags
+5561c16 [32s] parallel deterministic solves + parallel island recomputes
+ff70695 [32s] reuse flooder for islands
+a9c6fd6 [38s] store less data for islands
+9d4eea2 [50s] notes
