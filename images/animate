@@ -4,16 +4,28 @@ set -eu
 
 generate-list() {
   echo "file '$(ls *.png | head -n1)'|duration 2"
-  find . -maxdepth 1 -type f -name '*.png' -printf "%T@\tfile '%f'|duration 0.07\n" | sort -n | cut -f 2-
-  echo "file '$(ls -r *.png | head -n1)'|duration 5"
+  find . -maxdepth 1 -type f -name '*.png' -printf "%T@\tfile '%f'|duration 0.07\n" | grep -v -- '-done.png' | sort -n | cut -f 2-
+  echo "file '$(ls -r *.png | head -n1)'|duration 3"
+  echo "file '$(ls -r *.png | head -n1)'|duration 1" # somehow this file gets ignored, so I duplicated it
 }
 
 # run ./solve before
-cd "$(ls -dt images/*/ | head -n1)"
+
+if [ -z "${1:-}" ]; then
+  directory="$(ls -dt images/*/ | head -n1)"
+  echo "using: $directory"
+else
+  directory="$1"
+fi
+
+cd "$directory"
 generate-list | tr '|' '\n' > list
 
-ffmpeg -f concat -i list -framerate 15 -c:v libx264 -r 30 -crf 0 -profile:v high444 out.mp4
+ffmpeg -hide_banner -loglevel error -f concat -i list -framerate 15 -c:v libx264 -r 30 -crf 0 -profile:v high444 out.mp4
 
-mpv out.mp4 &> /dev/null
 mkdir -p ../videos
 cp out.mp4 "../videos/$(basename "$(pwd)").mp4"
+echo produced: "$(realpath "../videos/$(basename "$(pwd)").mp4")"
+if which mpv &> /dev/null && [ "${preview:-1}" = 1 ]; then mpv out.mp4 &> /dev/null; else fi
+
+touch . # because this script finds this directory by latest touched directory and without this line videos/ is last

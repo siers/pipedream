@@ -1,16 +1,22 @@
-solve.hs   this is the solver
-samples/   here are the samples
-notes      scratchpad
+Pipemaze.hs   this is the solver
+notes         scratchpad
+samples/      here are the samples
+problems/     tiny files for ironing out problems
+
+http://raitis.veinbahs.lv/maze/doc/Pipemaze.html
 
 running
-  nix-shell shell.nix --run 'ghc -O solve.hs && ./solve < samples/2'
+  nix-shell shell.nix --run 'ghc Main.hs -o solve && ./solve samples/2'
 
 running with websocket
-  websocket=1 ./solve
+  nix-shell shell.nix --run 'ghc Main.hs -o solve && time bench=True websocket=maze-server/pipes/#1,2,3,4,5,6 ./solve'
+
+generate docs
+  haddock Pipemaze.hs -o haddock -h --hyperlinked-source --quickjump
 
 fun things to do for visualizations:
   remove coloring by equivalent parts in renderWithPositions
-  screw with the score variable in sortContinues
+  screw with the score variable in sortContinues (this will likely lead to bad solve times)
   increase the frequency to see more intermediate steps
 
 --
@@ -29,6 +35,21 @@ run 8 cores
 
 :l solve without having to resolve all type errors (amazing!)
   % ghci -fdefer-type-errors
+
+--
+
+with trace=4 you can make images in images/
+
+after creating images you can animate them by running ./images/animate without any arguments (uses last directory)
+
+insert this after "initSolve" to generate all solutions (works for 1..5 levels)
+  flip (iterateMaybeM 1000) (p, 0) $ \(p, n) -> do
+    p <- solve' p
+    traverse ((liftIO . putStrLn =<<) . liftIO . renderStr . (\Progress{maze} -> maze)) p
+    fmap (, n + 1) <$> traverse (renderImage' ("solution-" ++ show n)) p
+  error "die"
+  -- AND comment out the following line:
+  solve' p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p) -- remove this to compute all solutions
 
 --
 

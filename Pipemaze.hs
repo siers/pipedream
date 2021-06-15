@@ -22,45 +22,46 @@ Maintainer  : wimuan@email.com
 Stability   : experimental
 Portability : POSIX
 
-A dynamic solver of pipe mazes with an internal 'priority' queue based on scores, position and priority creation order.
-
-The goal of the solver is to find the rotation of each piece in the grid to create a connected graph.
-The number of valid rotations of a piece are encoded in 'Choices'.
-Each cursor has four nearby cursors – top/right/bottom/left, which wil be refered to as 'directions' or 'deltas'.
-The 'Cursor's in one square's distance in a 'direction' with respect to some cursor @c@ may also be called 'deltas'.
-Disconnected graphs that will have to be connected
-to the other graphs later are being refered to as /components/. <https://en.wikipedia.org/wiki/Component_(graph_theory)>
-
-Solving each piece gives you hints about surrounding pieces,
-so solving them in our order('rescoreContinue') is more effective than solving in an arbitrary order. If the connectivity of the pieces is efficiently
-computed ('PartId' \/ 'partEquate'), the "open ends" ('Continues') have a good prioritization and the disconnected solves are efficiently computed
-and discarded ('pieceDead' \/ 'compAlive'), you can solve around 98% of the level 6 maze determinstically.
+A dynamic solver of pipe mazes with an internal 'priority' queue based on scores, position and priority creation order and much more.
 -}
 
 module Pipemaze (
+  -- * High-level description
+  -- $description
+
+  -- * Islands
+  -- $islands
+
+  -- * Bugs and improvements
+  -- $bugs
+
   -- * Types
   Direction, Rotation, Pix, Cursor, Fursor, MMaze(..), Piece(..), Choices, PartId, Continue(..)
-  , Priority, Continues, Components(..), Unwind, Progress(..), Island(..), Bounds, Configuration
+  , Priority, Continues, Components(..), Unwind(..), Progress(..), Island(..), IslandSolution(..)
+  , Bounds, SolveMode(..), Configuration(..), Solver, SolverT
   -- * Maze operations
-  , parse, mazeStore, mazeBounded, mazeRead, mazeSolve, mazeDelta, mazeFDelta, mazeEquate, mazePop, partEquate
+  , parse, mazeStore, mazeBounded, mazeCursor, mazeFursor, mazeRead, mazeModify
+  , mazeClone, mazeSolve, mazeDelta, mazeFDelta, mazeEquate, mazePop, partEquate
   -- * Tracing and rendering
-  , renderImage'
+  , render, renderStr, renderImage'
   , traceBoard
   -- * Pixel model
   , directions, rotations, charMap, pixMap, pixRotations, pixDirections, directionsPix, toPix, toChar, rotate
   -- * Pixel solving
   , pixValid, validateDirection, pieceChoices
   -- * Component indexing
-  , compInsert, compRemove, compEquate, compAlive, compConnected
+  , compInsert, compRemove, compEquate, compAlive, compConnected, compCounts
   -- * Continue operations
-  , deltaContinue, prioritizeDeltas, rescoreContinue, prioritizeContinues
-  , pieceDead, findContinue
+  , deltaContinue, prioritizeDeltas, rescoreContinue, prioritizeContinue, prioritizeContinues
+  , pieceDead, findContinue, popContinue
   -- * Island computations
-  , FillNext, flood, islands
-  -- * Solver brain
-  , solveContinue, solve', initProgress, backtrack, solve
+  , FillNext, flood, islandize, islandConnectivityRefinement, islandChoices, islands, islandHinting
+  -- * Backtracker
+  , solveContinue, backtrack, solve'
+  -- * Metasolver
+  , componentRecalc, islandChoicesParallel, solveDetParallel, solveTrivialIslands, initProgress, solve
   -- * Main
-  , verify, storeBad, rotateStr, pļāpātArWebsocketu, solveFile, main
+  , verify, storeBad, rotateStr, configuration, pļāpātArWebsocketu, solveFile, main
 ) where
 
 -- solver
@@ -138,20 +139,63 @@ import System.IO (hFlush, stdout)
 -- tM :: (Functor f, Show a) => f a -> f a
 -- tM = fmap t
 
+-- $description
+-- The goal of the solver is to find the 'Rotation' of each 'Pix' in the grid to create a connected undirected graph.
+-- Just like in this game here: <https://www.puzzle-pipes.com/>
+--
+-- * Each cursor has four nearby cursors – top, right, bottom, left, which wil be refered to as 'directions' or 'deltas'.
+-- * The 'Cursor's in one square's distance in a 'direction' with respect to some cursor @c@ may also be called 'deltas'.
+-- * The number of valid rotations of a piece are encoded in 'Choices'.
+-- * Each 'Piece' contains initial 'Choices' which are bit-packed info 'initChoices',
+-- * Distinct graphs are being refered to as /components/ and each has a distinct 'PartId' computed by the smallest 'Fursor' of the graph.
+--  <https://en.wikipedia.org/wiki/Component_(graph_theory)>
+-- * All 'Component\''s open ends are refered to as 'Continue's,
+--  which then later get stored in 'Continue' to make a piece "active", making 'Piece' information is no longer necessary.
+-- * The cursors are stored as flat indexes ('Fursor') to make comparison computations faster ('IntMap'). Conversions to 'Cursor'
+--  are possible via 'mazeCursor', 'mazeFursor'.
+-- * 'Progress' holds main data of the backtracker, the only mutable data is 'MMaze', which stores correctly solved 'Pix' and
+--  'partId's which get updated as graphs become joined.
+--
+-- Solving each piece gives you hints about surrounding pieces,
+-- so solving them by diagonals ('rescoreContinue') is more effective than solving in an arbitrary order.
+-- If the connectivity of the pieces is efficiently computed ('PartId' \/ 'partEquate'),
+-- the "open ends" ('Continues') have a good prioritization and the disconnected solves are efficiently (computed
+-- and then) discarded ('pieceDead' \/ 'compAlive'), you can solve around 98% of the level 6 maze determinstically.
+
+-- $islands
+-- Island is a patch of unsolved pieces, each one has its own number of solutions.
+-- Solving it by backtracking makes the search space multiply after guessing one island after another in a single 'Progress'.
+-- Instead, you can force the backtracker to only count the solutions of a single island with 'cBounds'.
+-- If you group the solutions ('islandConnectivityRefinement'), many islands have a single best or equivalent solution.
+-- 'solveTrivialIslands' runs the backtracker for all "simple" islands, then recomputes all islands, then repeats.
+-- This is all that's necessary to solve all level 6 mazes pretty fast as far as I'm aware.
+--
+-- Grouping in 'islandConnectivityRefinement' takes place in two steps: group by equal 'Components',
+-- refine 'icComponents' by their partition 'PartialOrd'.
+
+-- $bugs
+-- * Parallelism works but seems to make solving a little slower. Only mutable data is 'MMaze' and it seems to be handled correctly.
+--  Almost all of the code for single-thread version is the same.
+-- * All 'IslandSolution's are getting recomputed after each determinstic solve, which can be fixed, but it's already very fast
+-- * 'IslandSolution' could be recomputable without running main solver,
+--  just by checking that nothing gets disconnected after running it through all the 'Unwind's of last solve.
+-- * 'IslandSolution's could be chosen by just checking that the 'icConnections' connect some graph constructed from islands.
+
 -- | Directions: top 0, right 1, bottom 2, left 3
 type Direction = Int
 -- | The set of rotation values are the same as directions.
 type Rotation = Int
--- | The maze symbol bit-packed in 'charMap' as @2^d@ per direction, mirrored in @shiftL 4@ to help bit rotation
+-- | The maze symbol (has four edges) bit-packed in 'charMap' as @2^d@ per direction, mirrored in @shiftL 4@ to help bit rotation
 --
--- > I – ━, ┃
--- > L – ┏, ┛, ┓, ┗
--- > T – ┣, ┫, ┳, ┻
--- > X – ╋
--- > i – ╸, ╹, ╺, ╻
+-- > X – ╋          -- 4 edges
+-- > I – ━, ┃       -- 2 edges
+-- > L – ┏, ┛, ┓, ┗ -- 2 edges
+-- > T – ┣, ┫, ┳, ┻ -- 3 edges
+-- > i – ╸, ╹, ╺, ╻ -- 1 edge
 type Pix = Word8
 type Cursor = (Int, Int)
 -- | Flat cursors, for @f :: FCursor, (x, y) :: Cursor, f = x + y * width@. Through `Choices`, bound checking is cached, so deltas are just ±1 or ±width.
+type Width = Int
 type Fursor = Int
 
 -- | unlawful instance
@@ -182,11 +226,11 @@ data Piece = Piece
 instance GStorable Piece
 
 -- | 'Choices' is bit-packed info related to the valid rotations of a picce.
--- In MSB order: (valid) rotation count 2b, invalid rotation directions 4b, solved requirements 4b, solved neighbours 4b
+-- In MSB order: (valid) rotation count 2b, invalid rotation directions 4b (unused), solved requirements 4b, solved neighbours 4b
 type Choices = Int
 (choicesSolveds, _choicesRequire, choicesInvalid, choicesCount) = (0, 4, 8, 12)
 
--- | Continue represents the piece that should be solved next, which is an open end of a component
+-- | Continue represents the piece that should be solved next according to 'Priority', which is an open end of a component
 -- (or starts one). Created in 'initProgress' or 'deltaContinue'.
 data Continue = Continue
   { cursor :: Fursor
@@ -205,7 +249,7 @@ data Continue = Continue
 -- updated after components have connected.
 type PartId = Fursor
 
--- | 'Continue' priority queue, inserted by 'prioritizeContinue', popped by 'findContinue'
+-- | 'Continue' priority queue, inserted by 'prioritizeContinue', found by 'findContinue', popped by 'popContinue'.
 type Priority = IntMap Fursor
 -- | Primary storage of 'Continue' data
 type Continues = IntMap Continue
@@ -248,7 +292,8 @@ type Bounds = Maybe (Fursor -> Bool)
 bounded :: Bounds -> Fursor -> Bool
 bounded b c = all ($ c) b
 
--- | Amalgamation of the flags "determinstic", "save history" and "deprioritize unbounded continues" (see 'rescoreContinue').
+-- | Amalgamation of the flags "determinstic", "save history" and "deprioritize unbounded continues"
+-- (it's for parallelism, see 'rescoreContinue').
 data SolveMode = SolveNormal | SolveDeterministic | SolveIslandDeterministic | SolveParallel deriving (Show, Eq, Ord)
 
 solveDeterministic SolveNormal = True
@@ -263,7 +308,7 @@ data Configuration = Configuration
   , cDebugFreq :: Int
   , cLifespan :: Int
   , cMode :: SolveMode
-  , cBounds :: Bounds
+  , cBounds :: Bounds -- ^ forces the solver to stay within bounds
   , cBench :: Bool
   , cImageDir :: String
   } -- deriving (Show, Eq, Ord, Generic)
@@ -284,6 +329,8 @@ data Island = Island
 
 -- | IslandSolution represent a solution for an island with a representative progress.
 -- The 'icConnections' are a partition of the components the island joined.
+-- Partitions have a partial ordering called _refinement_ with which you can group 'iSolutions'.
+-- <https://en.wikipedia.org/wiki/Partition_of_a_set#Refinement_of_partitions>
 data IslandSolution = IslandSolution
   -- { icProgess :: Progress
   { icConnections :: [Set PartId] -- the surrounding 'PartId' partition (induces a PartialOrd)
@@ -378,11 +425,11 @@ vectorLists :: Storable a => Int -> Int -> V.Vector a -> [[a]]
 vectorLists width height board = [ [ board V.! (x + y * width) | x <- [0..width - 1] ] | y <- [0..height - 1] ]
 
 {-# INLINE mazeCursor #-}
-mazeCursor :: Int -> Int -> Cursor
+mazeCursor :: Width -> Fursor -> Cursor
 mazeCursor width = swap . flip quotRem width
 
 {-# INLINE mazeFursor #-}
-mazeFursor :: Int -> Cursor -> Fursor
+mazeFursor :: Width -> Cursor -> Fursor
 mazeFursor w (x, y) = x + y * w
 
 {-# INLINE mazeRead #-}
@@ -454,6 +501,16 @@ partEquate maze v = loop' =<< find v
 
 {--- Rendering, tracing ---}
 
+-- | Print colorized ANSI to stdout.
+render :: MonadIO m => MMaze -> m ()
+render = liftIO . (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) []
+
+-- | Generate uncolorized output
+renderStr :: MMaze -> IO String
+renderStr MMaze{board, width, height} =
+  unlines . map concat . map (map (return . toChar . pipe)) . vectorLists width height . V.convert
+  <$> V.freeze board
+
 renderImage :: MonadIO m => String -> MMaze -> Continues -> m ()
 renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
   mcanvas <- thaw canvas :: IO (MImage RealWorld VU RGB Double)
@@ -505,15 +562,7 @@ renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $
         Just color -> printf "\x1b[38;5;%im%c\x1b[39m" ([24 :: Int, 27..231] !! color) (toChar pipe)
         _ -> (toChar pipe) : []
 
-render :: MonadIO m => MMaze -> m ()
-render = liftIO . (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) []
-
-renderStr :: MMaze -> IO String
-renderStr MMaze{board, width, height} =
-  unlines . map concat . map (map (return . toChar . pipe)) . vectorLists width height . V.convert
-  <$> V.freeze board
-
--- | Tracing with at each @F\REQ@th step via @T\RACE@ (both compile-time variables, use with with @ghc -D@).
+-- | Tracing at each @freq=@ step with @debug=@ environment variables.
 --
 -- Modes: 1. print stats \/ 2. print maze with terminal escape code codes \/ 3. as 2., but with clear-screen before \/
 -- 4. as 1., but with image output \/ 5. as 4., but only after islands have started
@@ -718,7 +767,7 @@ deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initCho
 
 {-# INLINE prioritizeDeltas #-}
 -- | Calls 'prioritizeContinue' on nearby pieces (delta = 1)
-prioritizeDeltas :: Int -> Progress -> Continue -> SolverT Progress
+prioritizeDeltas :: Width -> Progress -> Continue -> SolverT Progress
 prioritizeDeltas width p@Progress{iter, maze} continue@Continue{cursor=cur, choices} = do
   (toSolverT . prioritizeContinues p =<<) . for (zip [0..] (pixNDirections choices)) $ \(i, d) -> do
     piece <- mazeRead maze (mazeFDelta width cur d)
@@ -729,7 +778,7 @@ prioritizeDeltas width p@Progress{iter, maze} continue@Continue{cursor=cur, choi
 -- | Recalculates the 'Continue's score, less is better (because of 'IntMap.deleteFindMin' in 'findContinue').
 --
 -- > score = (0 - island << 17 + (choices << (15 - choicesCount)) + x + y) << 32 + created
-rescoreContinue :: Bounds -> Int -> Continue -> Continue
+rescoreContinue :: Bounds -> Width -> Continue -> Continue
 rescoreContinue bounds width c@Continue{cursor, choices=choicesBits, island, area, created} = set scoreL score c
   where
     score = (0 + bound << 34 - island << 27 + area << 15 + (choices << (12 - choicesCount)) + x + y) << 28 + created
@@ -739,7 +788,7 @@ rescoreContinue bounds width c@Continue{cursor, choices=choicesBits, island, are
     (x, y) = mazeCursor width cursor
 
 {-# INLINE prioritizeContinue' #-}
-prioritizeContinue' :: Int -> PrioCompCont -> Fursor -> (Maybe Continue -> Continue) -> Solver PrioCompCont
+prioritizeContinue' :: Width -> PrioCompCont -> Fursor -> (Maybe Continue -> Continue) -> Solver PrioCompCont
 prioritizeContinue' width (p, cp, ct) c get =
   ReaderT $ \Configuration{cBounds} -> Identity $ found cBounds (IntMap.lookup c ct)
   where
@@ -784,6 +833,8 @@ findContinue Progress{priority, continues} = do
       (\Continue{choices} -> solveDeterministic cMode || (2 > Bit.shiftR choices choicesCount))
       (cursor `IntMap.lookup` continues)
 
+{-# INLINE popContinue #-}
+-- | Pops next 'Continue' from queue.
 popContinue :: Progress -> Progress
 popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = IntMap.delete cursor c }
   where ((_, cursor), priority) = IntMap.deleteFindMin pr
@@ -805,45 +856,29 @@ flood n m = flip runStateT mempty . flood' n m Set.empty . return
     let next' = filter (not . flip Set.member visited) more ++ next
     flood' fillNext maze (Set.insert cursor visited) next'
 
+-- | Set low priority to all continues with island = 1.
 islandize :: Progress -> SolverT Progress
 islandize p@Progress{continues} = toSolverT $ do
   prioritizeContinues p (map (, mapContinue) (IntSet.toList (IntMap.keysSet continues)))
   where mapContinue = set areaL 999 . set islandL 1 . fromJust
 
-islandHinting :: [Island] -> Progress -> SolverT Progress
-islandHinting islands p@Progress{maze, continues} = do
-  reduceM p islands $ \_i@Island{iSolutions} p -> do
-    reduceM p (unique iSolutions) $ \IslandSolution{icHints=hints} p -> do
-      reduceM p hints $ deployHint
-  where
-    reduceM a l f = foldrM f a l
+islandConnectivityRefinement :: [IslandSolution] -> [IslandSolution]
+islandConnectivityRefinement = POSet.lookupMax . POSet.fromList . map head . groupSortOn icComponents
 
-    unique []      = Nothing
-    unique (a:[])  = Just a
-    unique (_:_:_) = Nothing
-
-    deployHint (UnSolve c _ pix _) p =
-      if IntMap.member c continues
-      then toSolverT (prioritizeContinue p c (forceContinue pix . fromJust))
-      else p <$ mazeModify maze (forcePiece pix) c
-
--- ^ Computes and set 'iChoices'/'iSolutions' for the island, but also modifies maze with 'icHints' if len choices == 1.
+-- | Computes and set 'iChoices'/'iSolutions' for the island, but also modifies maze with 'icHints' if len choices == 1.
 islandChoices :: MMaze -> Progress -> Island -> SolverT Island
 islandChoices _ Progress{components=Components _} _ = error "not enough info, unlikely"
 islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{iBounds} = do
   liftIO (MV.unsafeCopy (board maze') (board maze)) -- this copies much more than it needs to
   !solutions <- iterateMaybeM 1000 (solution . fst) . (, []) =<< toSolverT (islandProgress p i maze')
-  !solutions <- connectivityRefinement . join . map snd <$> pure solutions
+  !solutions <- islandConnectivityRefinement . join . map snd <$> pure solutions
 
   pure (i & set iChoicesL (length solutions) & set iSolutionsL solutions)
   where
-    constrain c = c { cLifespan = (-1), cBounds = Just (`IntSet.member` iBounds) }
+    constrain c = c { cLifespan = (-1), cBounds = Just (`IntSet.member` iBounds), cBench = True }
 
     solution :: Progress -> SolverT (Maybe (Progress, [IslandSolution]))
     solution p = withReaderT constrain (solve' p) >>= traverse (\p -> (p, ) . pure <$> islandSolution p)
-
-    connectivityRefinement :: [IslandSolution] -> [IslandSolution]
-    connectivityRefinement = POSet.lookupMax . POSet.fromList . map head . groupSortOn icComponents
 
     islandSolution :: MonadIO m => Progress -> m IslandSolution
     islandSolution Progress{components=Components _} = error "not enough info, unlikely"
@@ -858,10 +893,10 @@ islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{i
     islandProgress p Island{iConts=(Continue{cursor}:_)} maze =
       prioritizeContinue (p { maze, space = [] }) cursor (set islandL 2 . fromJust)
 
-islands :: MonadIO m => Progress -> m ([Island], IntMap Int)
+islands :: MonadIO m => Progress -> m [Island]
 islands Progress{maze=maze@MMaze{width}, continues} = do
-  islands <- snd <$> foldIsland perIsland (map (mazeCursor width . cursor . snd) . IntMap.toList $ continues)
-  pure (islands, foldMap (\Island{iId, iConts = cs} -> IntMap.fromList $ (, iId) <$> map cursor cs) islands)
+  snd <$> foldIsland perIsland (map (mazeCursor width . cursor . snd) . IntMap.toList $ continues)
+  -- pure (islands, foldMap (\Island{iId, iConts = cs} -> IntMap.fromList $ (, iId) <$> map cursor cs) islands)
   where
     foldIsland perIsland continues =
       (\acc -> foldrM acc (Set.empty, []) continues) $ \cursor acc@(visited, _) ->
@@ -881,11 +916,30 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
       when ((x + y * width) `IntMap.member` continues) $ State.modify (Set.insert cur)
       pure . map (mazeDelta cur . snd) . filter (\(Piece{pipe, solved}, _) -> pipe /= 0 && not solved) $ deltasWall
 
+-- | Set up 'Choices' for all 'Continue's and `Piece`s for all unique 'IslandSolution's.
+islandHinting :: [Island] -> Progress -> SolverT Progress
+islandHinting islands p@Progress{maze, continues} = do
+  reduceM p islands $ \_i@Island{iSolutions} p -> do
+    reduceM p (unique iSolutions) $ \IslandSolution{icHints=hints} p -> do
+      reduceM p hints $ deployHint
+  where
+    reduceM a l f = foldrM f a l
+
+    unique []      = Nothing
+    unique (a:[])  = Just a
+    unique (_:_:_) = Nothing
+
+    deployHint (UnSolve c _ pix _) p =
+      if IntMap.member c continues
+      then toSolverT (prioritizeContinue p c (forceContinue pix . fromJust))
+      else p <$ mazeModify maze (forcePiece pix) c
+    deployHint _ p = pure p
+
 {--- Backtracking solver ---}
 
 -- | Solves a valid piece, mutates the maze and sets unwind.
 -- Inefficient access: partEquate reads the same data as islands reads.
--- (All methods within this method are inlined)
+-- (All functions within this function are inlined)
 solveContinue :: Progress -> Continue -> SolverT Progress
 solveContinue
   progress@Progress{maze=maze@MMaze{width}, components = components_}
@@ -903,8 +957,8 @@ solveContinue
       =<< prioritizeDeltas width progress { components } continue { origin }
 
 -- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
--- This returns a progress with 'space' that always has an element or the maze isn't solvable
--- (assuming the algo's correct and the stack hasn't been split for divide and conquer).
+-- This returns a progress with the first available 'Continue' from 'space' or Nothing.
+-- If 'space' is empty, it gets popped, 'mazePop' gets called and it tries again until 'space' is empty.
 backtrack :: MonadIO m => Progress -> m (Maybe (Progress, Continue))
 backtrack Progress{space=[]} = pure Nothing
 backtrack p@Progress{space=(([], []):space)} =
@@ -917,12 +971,12 @@ backtrack p@Progress{space=((guesses, unwind):space), maze} = do
 
 -- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
 solve' :: Progress -> SolverT (Maybe Progress)
-solve' p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p)
+solve' p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p) -- remove this to compute all solutions
 solve' progress@Progress{depth, maze=maze@MMaze{size}, components} = do
   Configuration{cLifespan, cMode} <- ask
   guesses <- liftIO . foldMap (guesses progress) . maybeToList =<< toSolverT (findContinue progress)
-  guess <- backtrack . (spaceL %~ ((guesses, []) :)) =<< pure progress
-  guess <- pure $ guess & _Just . _1 . spaceL %~ (if cMode == SolveNormal then id else init)
+  guess <- backtrack . (spaceL %~ if null guesses then id else ((guesses, []) :)) =<< pure progress
+  guess <- pure $ guess & _Just . _1 . spaceL %~ (if solveWithHistory cMode then id else init)
   progress <- traverse (uncurry (solveContinue . popContinue)) guess
 
   unbounded <- null . join <$> toSolverT (traverse findContinue progress)
@@ -945,13 +999,23 @@ solve' progress@Progress{depth, maze=maze@MMaze{size}, components} = do
 
 {--- Meta solver ---}
 
--- Progress.components = Components -> Components'
+-- | Progress.components = Components -> Components'
 componentRecalc :: MonadIO m => Bool -> Progress -> m Progress
 componentRecalc deep p@Progress{maze, continues} = do
   comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
   pure . (\c -> p { components = c }) $ if deep then Components' comps else Components (IntMap.map IntSet.size comps)
   where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
 
+islandChoicesParallel :: Progress -> [MMaze] -> [Island] -> SolverT [Island]
+islandChoicesParallel p (copy:[]) islands = for islands (islandChoices copy p)
+islandChoicesParallel p copies islands = do
+  conf <- ask
+  let numCap = length copies
+  let islandChunks = zip copies . transpose . chunksOf numCap $ islands
+  fmap join . liftIO . parallelInterleaved . flip map islandChunks $ \(copy, islands) ->
+    for islands (flip runReaderT conf . islandChoices copy p)
+
+-- | Sovles deterministic parts of the maze in parallel.
 solveDetParallel :: Int -> MMaze -> SolverT Progress
 solveDetParallel n m@MMaze{width} = do
   (_, zeroth):rest <- divideProgress m
@@ -990,14 +1054,6 @@ solveDetParallel n m@MMaze{width} = do
             l = if x `mod` qx < 2 || y `mod` qy < 2 then 0 else 1
             wrap = (n + qy) `div` qy -- wrap x = ceiling (n / q)
 
-islandChoicesParallel :: Progress -> [MMaze] -> [Island] -> SolverT [Island]
-islandChoicesParallel p copies islands =  do
-  conf <- ask
-  let numCap = length copies
-  let islandChunks = zip copies . transpose . chunksOf numCap $ islands
-  fmap join . liftIO . parallelInterleaved . flip map islandChunks $ \(copy, islands) ->
-    for islands (flip runReaderT conf . islandChoices copy p)
-
 solveTrivialIslands :: [MMaze] -> [Island] -> Progress -> SolverT Progress
 solveTrivialIslands _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
 solveTrivialIslands copies is p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
@@ -1029,7 +1085,7 @@ solve maze = do
   renderImage' "islandize" p
 
   copies <- replicateM numCap (mazeClone maze)
-  islands <- islandChoicesParallel p copies . fst =<< islands p
+  islands <- islandChoicesParallel p copies =<< islands p
   p <- solveTrivialIslands copies islands =<< islandHinting islands =<< islandize p
 
   p <- fmap (maybe p id) (solve' p)
@@ -1082,6 +1138,7 @@ rotateStr split input solved =
       where
         rotations from to = fromJust $ to `List.elemIndex` iterate (rotate 1) from
 
+-- | Create 'Configuration' from environment variables, create image output directory.
 configuration :: MMaze -> IO Configuration
 configuration MMaze{mazeId, level} = do
   let mazeDir :: String = printf ("lvl%i-%s") level mazeId
