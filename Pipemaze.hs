@@ -112,7 +112,10 @@ import qualified Data.Vector.Storable as V
 import qualified Data.Vector.Storable.Mutable as MV
 import System.Clock (getTime, Clock(Monotonic), diffTimeSpec, toNanoSecs)
 import System.Environment (lookupEnv, getArgs)
+import System.Directory (createDirectoryIfMissing)
 import Text.Printf (printf)
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (formatTime, defaultTimeLocale)
 
 -- parallel
 import Control.Concurrent.ParallelIO.Global (parallelInterleaved)
@@ -124,7 +127,6 @@ import Data.Aeson (ToJSON(..))
 import GHC.Generics (Generic)
 
 -- Main IO
-
 import Data.Text (Text)
 import Network.Socket (withSocketsDo)
 import qualified Data.Text as T
@@ -263,6 +265,7 @@ data Configuration = Configuration
   , cMode :: SolveMode
   , cBounds :: Bounds
   , cBench :: Bool
+  , cImageDir :: String
   } -- deriving (Show, Eq, Ord, Generic)
 
 type SolverT = ReaderT Configuration IO
@@ -310,6 +313,7 @@ confDefault = Configuration
   , cMode = SolveNormal
   , cBounds = Nothing
   , cBench = False
+  , cImageDir = "images/"
   }
 
 -- | unlawful
@@ -464,9 +468,9 @@ renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
     colorHash :: Cursor -> Double
     colorHash (x, y) =
       let
-        n = ((83 * fromIntegral x) / (37 * fromIntegral (y + 2))) + 0.5
+        n = ((83 * fromIntegral x) / (37 * fromIntegral (y + 2)))
         unfloor m = m - fromIntegral (floor m)
-      in unfloor $ (unfloor n) / 4 - 0.15
+      in unfloor n
 
     drawPiece :: MImage RealWorld VU RGB Double -> Cursor -> IO ()
     drawPiece image (x, y) = do
@@ -474,8 +478,8 @@ renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
       Piece{pipe, partId, solved} <- mazeRead maze fc
       ch <- colorHash . mazeCursor width <$> partEquate maze partId
       let cont = IntMap.lookup fc continues
-      let colo = maybe ch (\c -> if island c == 2 then 0.25 else (if island c == 1 then 0.5 else 0.7)) cont
-      let satu = if solved then 0.15 else (if isJust cont then 1 else 0)
+      let colo = maybe ch (\c -> if island c == 2 then 0.25 else 0.6) cont
+      let satu = if solved then 0.8 else (if isJust cont then 0.8 else 0)
       let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
       let fill = if not solved && pipe == 0b11111111 then PixelRGB 1 1 1 else toPixelRGB $ PixelHSI colo satu inte
       write image (border + x * pw + 1, border + y * ph + 1) fill
@@ -484,9 +488,10 @@ renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
 
 -- | The output format is: @images/lvl%i-%s-%0*i-%s.png level mazeId (sizeLen iter) name@
 renderImage' :: String -> Progress -> SolverT Progress
-renderImage' name p@Progress{maze=maze@MMaze{sizeLen, level, mazeId}, iter, continues} =
-  (p <$) . whenM (not . cBench <$> ask) $
-    renderImage (printf ("images/lvl%i-%s-%0*i-%s.png") level mazeId sizeLen iter name) maze continues
+renderImage' name p@Progress{maze=maze@MMaze{sizeLen}, iter, continues} =
+  (p <$) . whenM (not . cBench <$> ask) $ do
+    dir <- cImageDir <$> ask
+    renderImage (printf (dir ++ "%0*i-%s.png") sizeLen iter name) maze continues
 
 renderWithPositions :: MonadIO m => Maybe Continue -> Progress -> m String
 renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $ do
@@ -513,20 +518,22 @@ renderStr MMaze{board, width, height} =
 -- Modes: 1. print stats \/ 2. print maze with terminal escape code codes \/ 3. as 2., but with clear-screen before \/
 -- 4. as 1., but with image output \/ 5. as 4., but only after islands have started
 traceBoard :: Continue -> Progress -> SolverT Progress
-traceBoard current progress@Progress{iter, depth, maze=MMaze{size}} = do
+traceBoard current progress@Progress{iter=iter', depth, maze=MMaze{size}} = do
   Configuration{cDebug, cDebugFreq} <- ask
-  progress <$ tracer cDebug cDebugFreq True
+  islands <-
+    if iter `mod` (cDebugFreq `div` islandSlowdown) == 0
+    then any ((> 0) . island) <$> toSolverT (findContinue progress)
+    else pure False
+  progress <$ tracer cDebug (cDebugFreq `div` (if islands then islandSlowdown else 1)) islands
   where
+    (iter, islandSlowdown) = (iter' - 1, 50)
     tracer :: Int -> Int -> Bool -> SolverT ()
     tracer mode freq islandish
       | iter `mod` freq == 0 && mode == 1 = liftIO $ putStrLn solvedStr
       | iter `mod` freq == 0 && mode == 2 = liftIO $ traceStr >>= putStrLn
       | iter `mod` freq == 0 && mode == 3 = liftIO $ ((clear ++) <$> traceStr) >>= putStrLn
-      | iter `mod` freq == 0 && mode == 4 = do
-        tracer mode freq False
-        when islandish (void (renderImage' ("trace") progress))
-      | iter `mod` freq == 0 && mode == 5 =
-        tracer 4 freq =<< any ((> 0) . island) <$> toSolverT (findContinue progress)
+      | iter `mod` freq == 0 && mode == 4 = tracer 1 freq False >> void (renderImage' ("trace") progress)
+      | iter `mod` freq == 0 && mode == 5 = if islandish then tracer 4 freq True else pure ()
       | True = pure ()
 
     perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
@@ -1016,14 +1023,16 @@ solve :: MMaze -> SolverT MMaze
 solve maze = do
   time <- liftIO (getTime Monotonic)
   numCap <- liftIO getNumCapabilities
+
   p <- initSolve maze numCap
   p <- componentRecalc True =<< fmap fromJust (determinstically (solve' p))
+  renderImage' "islandize" p
 
   copies <- replicateM numCap (mazeClone maze)
   islands <- islandChoicesParallel p copies . fst =<< islands p
   p <- solveTrivialIslands copies islands =<< islandHinting islands =<< islandize p
 
-  p <- fmap (maybe p id) . solve' =<< renderImage' "islandize" p
+  p <- fmap (maybe p id) (solve' p)
 
   time' <- diffTimeSpec <$> liftIO (getTime Monotonic) <*> pure time
   let Progress{iter, depth, maze} = p
@@ -1073,9 +1082,12 @@ rotateStr split input solved =
       where
         rotations from to = fromJust $ to `List.elemIndex` iterate (rotate 1) from
 
-configuration :: IO Configuration
-configuration =
-  set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure confDefault
+configuration :: MMaze -> IO Configuration
+configuration MMaze{mazeId, level} = do
+  let mazeDir :: String = printf ("lvl%i-%s") level mazeId
+  imageDir :: String <- formatTime defaultTimeLocale ("images/%F-%H-%M-%S-" ++ mazeDir ++ "/") <$> getCurrentTime
+  conf <- set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure confDefault { cImageDir = imageDir }
+  (conf <$) . when (not . cBench $ conf) $ createDirectoryIfMissing True imageDir
   where
     set :: Read a => Setter' s a -> String -> s -> IO s
     set setter env s = (\v' -> (setter %~ (flip fromMaybe (read <$> v'))) s) <$> lookupEnv env
@@ -1094,7 +1106,7 @@ pļāpātArWebsocketu levels conn = for_ levels solveLevel
       send (T.pack "map")
       maze <- parse . T.unpack . T.drop 5 =<< WS.receiveData conn
 
-      solve <- runReaderT (storeBad level maze =<< solve =<< mazeClone maze) =<< configuration
+      solve <- runReaderT (storeBad level maze =<< solve =<< mazeClone maze) =<< configuration maze
       putStr "rotating..." >> hFlush stdout
       traverse (\r -> do send r; recv) =<< rotateStr 10_000 maze solve
 
@@ -1104,10 +1116,11 @@ pļāpātArWebsocketu levels conn = for_ levels solveLevel
 -- | Run solver, likely produce trace output and complain if solve is invalid ('verify').
 solveFile :: String -> IO ()
 solveFile file = do
-  conf <- configuration
+  maze <- parse =<< readFile file
+  conf <- configuration maze
 
   flip runReaderT conf $ do
-    solved <- solve =<< liftIO (parse =<< readFile file)
+    solved <- solve maze
     whenM (not <$> verify solved) (liftIO (putStrLn "solution invalid"))
 
 -- | Executable entry point.

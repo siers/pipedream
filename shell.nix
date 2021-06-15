@@ -19,6 +19,7 @@ let
     clock
     containers
     derive-storable
+    directory
     extra
     fgl
     hip
@@ -30,6 +31,7 @@ let
     pomaps
     primitive
     text
+    time
     transformers
     unordered-containers
     vector
