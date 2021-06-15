@@ -110,6 +110,7 @@ import qualified Data.POSet as POSet
 import qualified Data.Set as Set
 import qualified Data.Vector.Storable as V
 import qualified Data.Vector.Storable.Mutable as MV
+import System.Clock (getTime, Clock(Monotonic), diffTimeSpec, toNanoSecs)
 import System.Environment (lookupEnv, getArgs)
 import Text.Printf (printf)
 
@@ -1006,6 +1007,7 @@ initProgress m@MMaze{trivials} =
 -- | Solver main, returns solved maze
 solve :: MMaze -> SolverT MMaze
 solve maze = do
+  time <- liftIO (getTime Monotonic)
   p <- initSolve maze =<< liftIO (getNumCapabilities)
   p <- componentRecalc True =<< fmap fromJust (determinstically (solve' p))
 
@@ -1015,8 +1017,11 @@ solve maze = do
 
   p <- fmap (maybe p id) . solve' =<< renderImage' "islandize" p
 
+  time' <- diffTimeSpec <$> liftIO (getTime Monotonic) <*> pure time
   let Progress{iter, depth, maze} = p
-  liftIO (putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f" iter depth (fromIntegral iter / fromIntegral depth :: Double)))
+  let ratio = fromIntegral iter / fromIntegral depth :: Double
+  let runtime = fromIntegral (toNanoSecs time') / 1_000_000_000 :: Double
+  liftIO (putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f, time: %0.2fs" iter depth ratio runtime))
   maze <$ renderImage' "done" p
 
   where

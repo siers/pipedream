@@ -16,6 +16,7 @@ let
     aeson
     base
     bytestring
+    clock
     containers
     derive-storable
     extra

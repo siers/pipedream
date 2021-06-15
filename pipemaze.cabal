@@ -15,6 +15,7 @@ executable solve
       aeson
     , base
     , bytestring
+    , clock
     , containers
     , derive-storable
     , extra
