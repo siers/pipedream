@@ -86,7 +86,7 @@ import Data.Function (on)
 import Data.Functor.Identity (Identity(..), runIdentity)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
-import Data.List.Extra (nubOrd, groupSort, groupSortOn)
+import Data.List.Extra (nubOrd, groupSort, groupSortOn, splitOn, chunksOf, intersperse)
 import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
 import Data.Monoid (Sum(..))
@@ -128,6 +128,7 @@ import Data.Text (Text)
 import Network.Socket (withSocketsDo)
 import qualified Data.Text as T
 import qualified Network.WebSockets as WS
+import System.IO (hFlush, stdout)
 
 -- t a = seq (trace (show a) a) a
 -- t' l a = seq (trace (show l ++ ": " ++ show a) a) a
@@ -358,8 +359,8 @@ parse input = do
     trivials MMaze{board} = map fst . filter trivial . zip [0..] . V.toList <$> V.freeze board
     trivial (_, Piece{pipe, initChoices}) = pipe == 0b11111111 || Bit.shiftR initChoices choicesCount < 2
 
-mazeStore :: MMaze -> String -> IO ()
-mazeStore m label = writeFile label =<< renderStr m
+mazeStore :: MonadIO m => MMaze -> String -> m ()
+mazeStore m label = liftIO (writeFile label =<< renderStr m)
 
 {-# INLINE mazeBounded #-}
 mazeBounded :: MMaze -> Cursor -> Bool
@@ -1024,25 +1025,28 @@ solve maze = do
 
 {--- Main ---}
 
-verify :: MMaze -> IO Bool
+verify :: MMaze -> SolverT Bool
 verify maze@MMaze{size} = do
-  (size ==) . Set.size . fst <$> flood fillNextValid maze (0, 0)
+  required <- not . cBench <$> ask
+  if required
+  then (size ==) . Set.size . fst <$> flood fillNextValid maze (0, 0)
+  else pure True
   where
-    fillNextValid :: FillNext IO ()
+    fillNextValid :: FillNext SolverT ()
     fillNextValid maze cur Piece{pipe=this} deltasWalls = pure $
       if validateRotation this deltasWalls 0
       then filter (mazeBounded maze) . map (mazeDelta cur) $ pixDirections this
       else []
 
-storeBad :: Int -> MMaze -> MMaze -> IO MMaze
-storeBad level original solved = do
-  whenM (fmap not . verify $ solved) $ do
-    putStrLn (printf "storing bad level %i solve" level)
+storeBad :: Int -> MMaze -> MMaze -> SolverT MMaze
+storeBad level original solved = (solved <$) $ do
+  whenM (not <$> verify solved) $ do
+    liftIO (putStrLn (printf "storing bad level %i solve" level))
     mazeStore original ("samples/bad-" ++ show level)
-  pure solved
 
-rotateStr :: MMaze -> MMaze -> IO Text
-rotateStr input solved = concatenate <$> rotations input solved
+rotateStr :: Int -> MMaze -> MMaze -> IO [Text]
+rotateStr split input solved =
+  map concatenate . chunksOf split <$> rotations input solved
   where
     concatenate :: [(Cursor, Rotation)] -> Text
     concatenate =
@@ -1056,9 +1060,16 @@ rotateStr input solved = concatenate <$> rotations input solved
       where
         rotations from to = fromJust $ to `List.elemIndex` iterate (rotate 1) from
 
+configuration :: IO Configuration
+configuration =
+  set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure confDefault
+  where
+    set :: Read a => Setter' s a -> String -> s -> IO s
+    set setter env s = (\v' -> (setter %~ (flip fromMaybe (read <$> v'))) s) <$> lookupEnv env
+
 -- | Gets passwords for solved levels from the maze server.
-pļāpātArWebsocketu :: WS.ClientApp ()
-pļāpātArWebsocketu conn = for_ [1..6] solveLevel
+pļāpātArWebsocketu :: [Int] -> WS.ClientApp ()
+pļāpātArWebsocketu levels conn = for_ levels solveLevel
   where
     send = WS.sendTextData conn
     recv = T.unpack <$> WS.receiveData conn
@@ -1070,31 +1081,36 @@ pļāpātArWebsocketu conn = for_ [1..6] solveLevel
       send (T.pack "map")
       maze <- parse . T.unpack . T.drop 5 =<< WS.receiveData conn
 
-      send =<< rotateStr maze =<< storeBad level maze =<< runReaderT (solve =<< mazeClone maze) confDefault
-      recv
+      solve <- runReaderT (storeBad level maze =<< solve =<< mazeClone maze) =<< configuration
+      putStr "rotating..." >> hFlush stdout
+      traverse (\r -> do send r; recv) =<< rotateStr 10_000 maze solve
 
       send (T.pack "verify")
-      putStrLn =<< recv
+      putStrLn . ("\r" ++) =<< recv
 
 -- | Run solver, likely produce trace output and complain if solve is invalid ('verify').
 solveFile :: String -> IO ()
 solveFile file = do
-  conf@Configuration{cBench=bench} <-
-    set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure confDefault
+  conf <- configuration
 
-  solved <- runReaderT (solve =<< liftIO (parse =<< readFile file)) conf
-  verified <- if bench then pure True else verify solved
-  when (not verified) (putStrLn "solution invalid")
-
-  where
-    set :: Read a => Setter' s a -> String -> s -> IO s
-    set setter env s = (\v' -> (setter %~ (flip fromMaybe (read <$> v'))) s) <$> lookupEnv env
+  flip runReaderT conf $ do
+    solved <- solve =<< liftIO (parse =<< readFile file)
+    whenM (not <$> verify solved) (liftIO (putStrLn "solution invalid"))
 
 -- | Executable entry point.
 main :: IO ()
-main = do
-  websocket <- (== "1") . fromMaybe "0" <$> lookupEnv "websocket"
+main = run . fmap parseUrl =<< lookupEnv "websocket"
+  where
+    run (Just (host, path, levels)) =
+      withSocketsDo $ WS.runClient host 80 path (pļāpātArWebsocketu levels)
+    run Nothing =
+      traverse_ solveFile . (\args -> if null args then ["/dev/stdin"] else args) =<< getArgs
 
-  if websocket
-  then withSocketsDo $ WS.runClient "maze.server.host" 80 "/game-pipes/" pļāpātArWebsocketu
-  else traverse_ solveFile . (\args -> if null args then ["/dev/stdin"] else args) =<< getArgs
+    parseUrl :: String -> (String, String, [Int])
+    parseUrl s =
+      case splitOn "/" s of
+        (host:rest) ->
+          case splitOn "#" ("/" ++ (join (intersperse "/" rest))) of
+            (path:levels:[]) -> (host, path, map read (splitOn "," levels))
+            _ -> error "usage: websocket=maze.host/1,2,3,4,5,6"
+        _ -> error "usage: websocket=maze.host/1,2,3,4,5,6"
