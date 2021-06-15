@@ -1,0 +1,19 @@
+#! /usr/bin/env zsh
+
+set -eu
+
+generate-list() {
+  echo "file '$(ls *.png | head -n1)'|duration 2"
+  find . -maxdepth 1 -type f -name '*.png' -printf "%T@\tfile '%f'|duration 0.07\n" | sort -n | cut -f 2-
+  echo "file '$(ls -r *.png | head -n1)'|duration 5"
+}
+
+# run ./solve before
+cd "$(ls -dt images/*/ | head -n1)"
+generate-list | tr '|' '\n' > list
+
+ffmpeg -f concat -i list -framerate 15 -c:v libx264 -r 30 -crf 0 -profile:v high444 out.mp4
+
+mpv out.mp4 &> /dev/null
+mkdir -p ../videos
+cp out.mp4 "../videos/$(basename "$(pwd)").mp4"
