@@ -76,7 +76,7 @@ import Control.Concurrent (getNumCapabilities)
 import Control.Lens (Setter', (&), (%~), set, _1, _2, _head, _Just)
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad.IO.Class (MonadIO(..), liftIO)
-import Control.Monad (join, filterM, void, when, mfilter, liftM)
+import Control.Monad (join, filterM, void, when, mfilter, liftM, replicateM)
 import Control.Monad.Primitive (RealWorld)
 import Control.Monad.Reader (MonadReader(..), Reader, ReaderT(..), ask, withReaderT, mapReaderT)
 import Control.Monad.Trans.State.Strict (StateT(..))
@@ -86,7 +86,7 @@ import Data.Function (on)
 import Data.Functor.Identity (Identity(..), runIdentity)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
-import Data.List.Extra (nubOrd, groupSort, groupSortOn, splitOn, chunksOf, intersperse)
+import Data.List.Extra (nubOrd, groupSort, groupSortOn, splitOn, chunksOf, intersperse, transpose)
 import Data.Map.Strict (Map, (!))
 import Data.Maybe (fromMaybe, fromJust, isJust, maybeToList)
 import Data.Monoid (Sum(..))
@@ -983,19 +983,26 @@ solveDetParallel n m@MMaze{width} = do
             l = if x `mod` qx < 2 || y `mod` qy < 2 then 0 else 1
             wrap = (n + qy) `div` qy -- wrap x = ceiling (n / q)
 
-solveTrivialIslands :: MMaze -> [Island] -> Progress -> SolverT Progress
+islandChoicesParallel :: Progress -> [MMaze] -> [Island] -> SolverT [Island]
+islandChoicesParallel p copies islands =  do
+  conf <- ask
+  let numCap = length copies
+  let islandChunks = zip copies . transpose . chunksOf numCap $ islands
+  fmap join . liftIO . parallelInterleaved . flip map islandChunks $ \(copy, islands) ->
+    for islands (flip runReaderT conf . islandChoices copy p)
+
+solveTrivialIslands :: [MMaze] -> [Island] -> Progress -> SolverT Progress
 solveTrivialIslands _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
-solveTrivialIslands copy is p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
+solveTrivialIslands copies is p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
   where
     solveT Nothing = pure p
     solveT (Just _) = do
-      conf <- ask
       (_space, solve) <- (spaceL ((,) =<< id)) . fromJust <$> determinsticallyI (solve' p)
       -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
       let islandUnsolved = fmap (not . solved) . mazeRead maze . cursor . head . iConts
-      is <- liftIO (parallelInterleaved . map (flip runReaderT conf . (islandChoices copy solve)) =<< filterM islandUnsolved is)
+      is <- islandChoicesParallel p copies =<< filterM islandUnsolved is
       -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
-      solveTrivialIslands copy [] =<< islandHinting is solve
+      solveTrivialIslands copies [] =<< islandHinting is solve
 
 initProgress :: MMaze -> SolverT Progress
 initProgress m@MMaze{trivials} =
@@ -1008,12 +1015,13 @@ initProgress m@MMaze{trivials} =
 solve :: MMaze -> SolverT MMaze
 solve maze = do
   time <- liftIO (getTime Monotonic)
-  p <- initSolve maze =<< liftIO (getNumCapabilities)
+  numCap <- liftIO getNumCapabilities
+  p <- initSolve maze numCap
   p <- componentRecalc True =<< fmap fromJust (determinstically (solve' p))
 
-  copy <- mazeClone maze
-  is <- traverse (islandChoices copy p) . fst =<< islands p
-  p <- solveTrivialIslands copy is =<< islandHinting is =<< islandize p
+  copies <- replicateM numCap (mazeClone maze)
+  islands <- islandChoicesParallel p copies . fst =<< islands p
+  p <- solveTrivialIslands copies islands =<< islandHinting islands =<< islandize p
 
   p <- fmap (maybe p id) . solve' =<< renderImage' "islandize" p
 
