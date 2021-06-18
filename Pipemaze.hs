@@ -1150,8 +1150,8 @@ configuration MMaze{mazeId, level} = do
     set setter env s = (\v' -> (setter %~ (flip fromMaybe (read <$> v'))) s) <$> lookupEnv env
 
 -- | Gets passwords for solved levels from the maze server.
-pļāpātArWebsocketu :: [Int] -> WS.ClientApp ()
-pļāpātArWebsocketu levels conn = for_ levels solveLevel
+pļāpātArWebsocketu :: [Int] -> Bool -> WS.ClientApp ()
+pļāpātArWebsocketu levels hide conn = for_ levels solveLevel
   where
     send = WS.sendTextData conn
     recv = T.unpack <$> WS.receiveData conn
@@ -1168,7 +1168,7 @@ pļāpātArWebsocketu levels conn = for_ levels solveLevel
       traverse (\r -> do send r; recv) =<< rotateStr 10_000 maze solve
 
       send (T.pack "verify")
-      putStrLn . ("\r" ++) =<< recv
+      putStrLn . ("\r" ++) . (if hide then reverse . dropWhile (/= ' ') . reverse else id) =<< recv
 
 -- | Run solver, likely produce trace output and complain if solve is invalid ('verify').
 solveFile :: String -> IO ()
@@ -1184,8 +1184,9 @@ solveFile file = do
 main :: IO ()
 main = run . fmap parseUrl =<< lookupEnv "websocket"
   where
-    run (Just (host, path, levels)) =
-      withSocketsDo $ WS.runClient host 80 path (pļāpātArWebsocketu levels)
+    run (Just (host, path, levels)) = do
+      hide <- any (True ==) . fmap read <$> lookupEnv "hide"
+      withSocketsDo $ WS.runClient host 80 path (pļāpātArWebsocketu levels hide)
     run Nothing =
       traverse_ solveFile . (\args -> if null args then ["/dev/stdin"] else args) =<< getArgs
 
