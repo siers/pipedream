@@ -228,7 +228,7 @@ instance GStorable Piece
 -- | 'Choices' is bit-packed info related to the valid rotations of a picce.
 -- In MSB order: (valid) rotation count 2b, invalid rotation directions 4b (unused), solved requirements 4b, solved neighbours 4b
 type Choices = Int
-(choicesSolveds, _choicesRequire, choicesInvalid, choicesCount) = (0, 4, 8, 12)
+(choicesSolveds, choicesInvalid, choicesCount) = (0, 4, 8)
 
 -- | Continue represents the piece that should be solved next according to 'Priority', which is an open end of a component
 -- (or starts one). Created in 'initProgress' or 'deltaContinue'.
