@@ -43,7 +43,7 @@ module Pipemaze (
   , parse, mazeStore, mazeBounded, mazeCursor, mazeFursor, mazeRead, mazeModify
   , mazeClone, mazeSolve, mazeDelta, mazeFDelta, mazeEquate, mazePop, partEquate
   -- * Tracing and rendering
-  , render, renderStr, renderImage'
+  , renderColor, renderStr, renderImage'
   , traceBoard
   -- * Pixel model
   , directions, rotations, charMap, pixMap, pixRotations, pixDirections, directionsPix, toPix, toChar, rotate
@@ -174,6 +174,7 @@ import System.IO (hFlush, stdout)
 -- refine 'icComponents' by their partition 'PartialOrd'.
 
 -- $bugs
+-- * `partId`/`origin` is a little awkward, but `pipe`/`char` is even more so
 -- * Parallelism works but seems to make solving a little slower. Only mutable data is 'MMaze' and it seems to be handled correctly.
 --  Almost all of the code for single-thread version is the same.
 -- * All 'IslandSolution's are getting recomputed after each determinstic solve, which can be fixed, but it's already very fast
@@ -354,7 +355,7 @@ determinstically = withReaderT (set cModeL SolveDeterministic)
 determinsticallyI = withReaderT (set cModeL SolveIslandDeterministic) -- for islands, see withHistory
 
 confDefault = Configuration
-  { cDebug = 1
+  { cDebug = 0
   , cDebugFreq = 4070
   , cLifespan = (-1)
   , cMode = SolveNormal
@@ -501,15 +502,10 @@ partEquate maze v = loop' =<< find v
 
 {--- Rendering, tracing ---}
 
--- | Print colorized ANSI to stdout.
-render :: MonadIO m => MMaze -> m ()
-render = liftIO . (putStrLn =<<) . renderWithPositions Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) []
-
 -- | Generate uncolorized output
 renderStr :: MMaze -> IO String
 renderStr MMaze{board, width, height} =
-  unlines . map concat . map (map (return . toChar . pipe)) . vectorLists width height . V.convert
-  <$> V.freeze board
+  unlines . map (concat . map (return . toChar . pipe)) . vectorLists width height . V.convert <$> V.freeze board
 
 renderImage :: MonadIO m => String -> MMaze -> Continues -> m ()
 renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
@@ -550,8 +546,8 @@ renderImage' name p@Progress{maze=maze@MMaze{sizeLen}, iter, continues} =
     dir <- cImageDir <$> ask
     renderImage (printf (dir ++ "%0*i-%s.png") sizeLen iter name) maze continues
 
-renderWithPositions :: MonadIO m => Maybe Continue -> Progress -> m String
-renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $ do
+renderColorProgress :: MonadIO m => Maybe Continue -> Progress -> m String
+renderColorProgress _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $ do
   lines <- vectorLists width height . V.convert <$> V.freeze board
   pure . unlines . map concat =<< traverse (traverse fmt) lines
   where
@@ -562,23 +558,28 @@ renderWithPositions _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $
         Just color -> printf "\x1b[38;5;%im%c\x1b[39m" ([24 :: Int, 27..231] !! color) (toChar pipe)
         _ -> (toChar pipe) : []
 
+-- | Print unicode maze with colorized ANSI escape sequences to stdout.
+renderColor :: MonadIO m => MMaze -> m ()
+renderColor = liftIO . (putStrLn =<<) . renderColorProgress Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) []
+
 -- | Tracing at each @freq=@ step with @debug=@ environment variables.
 --
 -- Modes: 1. print stats \/ 2. print maze with terminal escape code codes \/ 3. as 2., but with clear-screen before \/
 -- 4. as 1., but with image output \/ 5. as 4., but only after islands have started
 traceBoard :: Continue -> Progress -> SolverT Progress
-traceBoard current progress@Progress{iter=iter', depth, maze=MMaze{size}} = do
+traceBoard current progress@Progress{iter=iter', depth, maze=maze@MMaze{size}} = do
   Configuration{cDebug, cDebugFreq} <- ask
   islands <-
-    if iter `mod` (cDebugFreq `div` islandSlowdown) == 0
+    if iter `mod` (max 1 (cDebugFreq `div` islandSlowdown)) == 0
     then any ((> 0) . island) <$> toSolverT (findContinue progress)
     else pure False
-  progress <$ tracer cDebug (cDebugFreq `div` (if islands then islandSlowdown else 1)) islands
+  progress <$ tracer cDebug (max 1 (cDebugFreq `div` (if islands then islandSlowdown else 1))) islands
   where
     (iter, islandSlowdown) = (iter' - 1, 50)
     tracer :: Int -> Int -> Bool -> SolverT ()
     tracer mode freq islandish
-      | iter `mod` freq == 0 && mode == 1 = liftIO $ putStrLn solvedStr
+      | iter `mod` freq == 0 && mode == 0 = liftIO $ putStrLn solvedStr
+      | iter `mod` freq == 0 && mode == 1 = liftIO $ renderStr maze >>= putStrLn
       | iter `mod` freq == 0 && mode == 2 = liftIO $ traceStr >>= putStrLn
       | iter `mod` freq == 0 && mode == 3 = liftIO $ ((clear ++) <$> traceStr) >>= putStrLn
       | iter `mod` freq == 0 && mode == 4 = tracer 1 freq False >> void (renderImage' ("trace") progress)
@@ -590,7 +591,7 @@ traceBoard current progress@Progress{iter=iter', depth, maze=MMaze{size}} = do
     solvedStr = printf "\x1b[2Ksolved: %02.2f%%, ratio: %0.2f\x1b[1A" perc ratio
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
-    traceStr = renderWithPositions (Just current) progress
+    traceStr = renderColorProgress (Just current) progress
 
 {--- Model ---}
 
@@ -628,6 +629,7 @@ pixMap = Map.fromList $ map swap charMapEntries
 {-# INLINE pixRotations #-}
 -- | This accounts for some piece's rotational symmetry
 pixRotations :: Pix -> [Rotation]
+pixRotations 0b00000000 = [0]
 pixRotations 0b11111111 = [0]
 pixRotations 0b10101010 = [0, 1]
 pixRotations 0b01010101 = [0, 1]
@@ -679,12 +681,15 @@ validateRotationM maze cursor this rotation =
 -- | Compute initial rotation fields for a piece's 'Choices'
 pieceChoices :: MMaze -> Cursor -> IO Choices
 pieceChoices maze@MMaze{width, height} cur@(x, y) = do
-  Piece{pipe=this} <- mazeRead maze (mazeFursor width cur)
-  if not ((x + 1) `mod` width < 2 || ((y + 1) `mod` height < 2) || this == 0b11111111 || this == 0b01010101 || this == 0b10101010)
-  then pure (Bit.shiftL 4 choicesCount)
-  else do
-    valids <- foldMap (\d -> Sum (Bit.bit 4 + Bit.bit d)) <$> filterM (validateRotationM maze cur this) (pixRotations this)
+  Piece{pipe} <- mazeRead maze (mazeFursor width cur)
+  if edge || length (pixRotations pipe) < 4
+  then do
+    valids <- foldMap choiceBits <$> filterM (validateRotationM maze cur pipe) (pixRotations pipe)
     pure . flip Bit.shiftL choicesInvalid . Bit.xor 0b1111 . getSum $ valids
+  else pure (Bit.shiftL 4 choicesCount)
+  where
+    edge = (x + 1) `mod` width < 2 || ((y + 1) `mod` height < 2)
+    choiceBits d = Sum (Bit.bit 4 + Bit.bit d)
 
 forceChoice :: Pix -> Pix -> Choices -> Choices
 forceChoice forced pix choices =
@@ -818,6 +823,7 @@ prioritizeContinue p = curry (prioritizeContinues p . pure)
 {-# INLINE pieceDead #-}
 -- | Check if 'Continue' is about to become separated from the rest of the graph.
 pieceDead :: MonadIO m => MMaze -> Components -> Fursor -> Pix -> Choices -> m Bool
+pieceDead _ _ _ 0b00000000 _ = pure False
 pieceDead maze components cur pix choices = do
   thisPart <- partEquate maze . partId =<< mazeRead maze cur
   pure (compAlive thisPart components && stuck)
@@ -1101,13 +1107,17 @@ solve maze = do
     initSolve m@MMaze{level=6} n | n > 1 = componentRecalc False =<< renderImage' "parallel" =<< solveDetParallel n m
     initSolve m _ = initProgress m
 
+solveIO :: MMaze -> IO MMaze
+solveIO m = configuration m >>= runReaderT (solve m)
+
 {--- Main ---}
 
 verify :: MMaze -> SolverT Bool
-verify maze@MMaze{size} = do
+verify maze@MMaze{board, size} = do
+  (Sum spaces) <- V.foldl' (flip (mappend . Sum . (fromEnum . (== 0) . pipe))) mempty <$> V.freeze board
   required <- not . cBench <$> ask
   if required
-  then (size ==) . Set.size . fst <$> flood fillNextValid maze (0, 0)
+  then (size - spaces ==) . Set.size . fst <$> flood fillNextValid maze (0, 0)
   else pure True
   where
     fillNextValid :: FillNext SolverT ()
