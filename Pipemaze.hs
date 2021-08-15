@@ -55,11 +55,11 @@ module Pipemaze (
   , deltaContinue, prioritizeDeltas, rescoreContinue, prioritizeContinue, prioritizeContinues
   , pieceDead, findContinue, popContinue
   -- * Island computations
-  , FillNext, flood, islandize, islandConnectivityRefinement, islandChoices, islands, islandHinting
+  , FillNext, flood, islandize, islandConnectivityRefinement, islandChoices, islands
   -- * Backtracker
   , solveContinue, backtrack, solve'
   -- * Metasolver
-  , componentRecalc, islandChoicesParallel, solveDetParallel, solveTrivialIslands, initProgress, solve
+  , componentRecalc, islandChoicesParallel, solveDetParallel, initProgress, solve
   -- * Main
   , verify, storeBad, rotateStr, configuration, pļāpātArWebsocketu, solveFile, main
 ) where
@@ -82,7 +82,7 @@ import Control.Monad.Primitive (RealWorld)
 import Control.Monad.Reader (MonadReader(..), Reader, ReaderT(..), ask, withReaderT, mapReaderT)
 import Control.Monad.Trans.State.Strict (StateT(..))
 import Data.Char (ord)
-import Data.Foldable (traverse_, for_, foldrM, fold)
+import Data.Foldable (traverse_, for_, foldlM, fold)
 import Data.Function (on)
 import Data.Functor.Identity (Identity(..), runIdentity)
 import Data.IntMap.Strict (IntMap)
@@ -181,6 +181,8 @@ import System.IO (hFlush, stdout)
 -- * 'IslandSolution' could be recomputable without running main solver,
 --  just by checking that nothing gets disconnected after running it through all the 'Unwind's of last solve.
 -- * 'IslandSolution's could be chosen by just checking that the 'icConnections' connect some graph constructed from islands.
+-- * 'IslandSolution' could have a heuristic for the number of solutions without solving all
+--  solutions by solving in breadth-wise first choices – '[Progress]' and only then depth-wise.
 
 -- | Directions: top 0, right 1, bottom 2, left 3
 type Direction = Int
@@ -709,6 +711,15 @@ forcePiece dst p@Piece{pipe=src} = (initChoicesL %~ forceChoice dst src) p
 forceContinue :: Pix -> Continue -> Continue
 forceContinue dst c@Continue{char=src} = (choicesL %~ forceChoice dst src) c
 
+forceHints :: Continues -> Progress -> [Unwind] -> SolverT Progress
+forceHints continues p@Progress{maze} hints = foldlM deployHint p hints
+  where
+    deployHint p (UnSolve c _ pix _) =
+      if IntMap.member c continues
+      then toSolverT (prioritizeContinue p c (forceContinue pix . fromJust))
+      else p <$ mazeModify maze (forcePiece pix) c
+    deployHint p _ = pure p
+
 {--- Solver bits: components ---}
 
 {-# INLINE compInsert #-}
@@ -811,10 +822,10 @@ prioritizeContinue' width (p, cp, ct) c get =
 -- | Inserts or reprioritizes 'Continue'
 prioritizeContinues :: Progress -> [(Fursor, Maybe Continue -> Continue)] -> Solver Progress
 prioritizeContinues progress@Progress{maze=MMaze{width}, priority, continues, components} reprios =
-  putback <$> (foldrM prio (priority, components, continues) reprios)
+  putback <$> (foldlM prio (priority, components, continues) reprios)
   where
     putback (p, cp, cn) = progress { priority = p, components = cp, continues = cn }
-    prio (c, get) acc = prioritizeContinue' width acc c get
+    prio acc (c, get) = prioritizeContinue' width acc c get
 
 {-# INLINE prioritizeContinue #-}
 prioritizeContinue :: Progress -> Fursor -> (Maybe Continue -> Continue) -> Solver Progress
@@ -905,7 +916,7 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
   -- pure (islands, foldMap (\Island{iId, iConts = cs} -> IntMap.fromList $ (, iId) <$> map cursor cs) islands)
   where
     foldIsland perIsland continues =
-      (\acc -> foldrM acc (Set.empty, []) continues) $ \cursor acc@(visited, _) ->
+      (\acc -> foldlM acc (Set.empty, []) continues) $ \acc@(visited, _) cursor ->
         if (cursor `Set.member` visited) then pure acc else perIsland cursor acc
 
     -- border = island's border by continues
@@ -924,22 +935,15 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
 
 -- | Set up 'Choices' for all 'Continue's and `Piece`s for all unique 'IslandSolution's.
 islandHinting :: [Island] -> Progress -> SolverT Progress
-islandHinting islands p@Progress{maze, continues} = do
-  reduceM p islands $ \_i@Island{iSolutions} p -> do
-    reduceM p (unique iSolutions) $ \IslandSolution{icHints=hints} p -> do
-      reduceM p hints $ deployHint
+islandHinting islands p@Progress{continues} = do
+  reduceM p islands $ \p _i@Island{iSolutions} -> do
+    foldlM (forceHints continues) p (icHints `map` unique iSolutions)
   where
-    reduceM a l f = foldrM f a l
+    reduceM a l f = foldlM f a l
 
-    unique []      = Nothing
-    unique (a:[])  = Just a
-    unique (_:_:_) = Nothing
-
-    deployHint (UnSolve c _ pix _) p =
-      if IntMap.member c continues
-      then toSolverT (prioritizeContinue p c (forceContinue pix . fromJust))
-      else p <$ mazeModify maze (forcePiece pix) c
-    deployHint _ p = pure p
+    unique []      = []
+    unique (a:[])  = [a]
+    unique (_:_:_) = []
 
 {--- Backtracking solver ---}
 
@@ -1073,6 +1077,19 @@ solveTrivialIslands copies is p@Progress{maze} = solveT =<< determinstically (to
       -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
       solveTrivialIslands copies [] =<< islandHinting is solve
 
+-- | Solve all island's pieces which remain the same in all solutions.
+solveIslandStatic :: [Island] -> Progress -> SolverT Progress
+solveIslandStatic islands p@Progress{continues} =
+  foldlM (\p _i@Island{iSolutions} -> forceHints continues p (uniqueHints iSolutions)) p islands
+  where
+    uniqueHints (solution:[]) = map unwindEraseBefore (icHints solution)
+    uniqueHints solutions = Set.toList (solutionIntersection solutions)
+
+    solutionIntersection = List.foldl1 Set.intersection . map (Set.fromList . map unwindEraseBefore . icHints)
+
+    unwindEraseBefore (UnSolve fursor _ pix _) = UnSolve fursor 0 pix 0
+    unwindEraseBefore a = a
+
 initProgress :: MMaze -> SolverT Progress
 initProgress m@MMaze{trivials} =
   let
@@ -1092,7 +1109,9 @@ solve maze = do
 
   copies <- replicateM numCap (mazeClone maze)
   islands <- islandChoicesParallel p copies =<< islands p
-  p <- solveTrivialIslands copies islands =<< islandHinting islands =<< islandize p
+  p <- fmap (maybe p id) . determinstically . solve' =<< solveIslandStatic islands p
+  renderImage' "islandize-static" p
+  -- p <- solveTrivialIslands copies islands =<< islandHinting islands =<< islandize p
 
   p <- fmap (maybe p id) (solve' p)
 
