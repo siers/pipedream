@@ -355,7 +355,7 @@ determinsticallyI = withReaderT (set cModeL SolveIslandDeterministic) -- for isl
 
 confDefault = Configuration
   { cDebug = 0
-  , cDebugFreq = 4070
+  , cDebugFreq = 10377
   , cLifespan = (-1)
   , cMode = SolveNormal
   , cBounds = Nothing
@@ -378,10 +378,10 @@ instance ToJSON IslandSolution
 
 -- | https://hackage.haskell.org/package/monad-extras-0.6.0/docs/src/Control-Monad-Extra.html#iterateMaybeM
 -- | Monadic equivalent to 'iterate', which uses Maybe to know when to terminate.
-iterateMaybeM :: Monad m => Int -> (a -> m (Maybe a)) -> a -> m [a]
-iterateMaybeM 0 _ _ = pure []
-iterateMaybeM n f x =
-  maybe (return []) (\x' -> (x':) `liftM` iterateMaybeM (n - 1) f x') =<< f x
+iterateMaybeM :: Monad m => Int -> (a -> m (Maybe a)) -> a -> m (Bool, [a])
+iterateMaybeM 0 _ _ = pure (True, [])
+iterateMaybeM n f x = fmap ((False, )) $
+  maybe (return []) (\x' -> ((x':) . snd) `liftM` iterateMaybeM (n - 1) f x') =<< f x
 
 {--- MMaze and Matrix operations ---}
 
@@ -883,9 +883,9 @@ islandConnectivityRefinement = POSet.lookupMax . POSet.fromList . map head . gro
 islandChoices :: MMaze -> Progress -> Island -> SolverT Island
 islandChoices _ Progress{components=Components _} _ = error "not enough info, unlikely"
 islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{iBounds} = do
-  liftIO (MV.unsafeCopy (board maze') (board maze)) -- this copies much more than it needs to
-  !solutions <- iterateMaybeM 1000 (solution . fst) . (, []) =<< toSolverT (islandProgress p i maze')
+  !(capped, solutions) <- iterateMaybeM 1000 (solution . fst) . (, []) =<< toSolverT (islandProgress p i maze')
   !solutions <- islandConnectivityRefinement . join . map snd <$> pure solutions
+  when capped $ liftIO (MV.unsafeCopy (board maze') (board maze)) -- this copies much more than it needs to
 
   pure (i & set iChoicesL (length solutions) & set iSolutionsL solutions)
   where
