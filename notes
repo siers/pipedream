@@ -406,7 +406,10 @@ c55febf [25s] Use IntMap/Fursor for Continues
 git log --format=oneline -1 --no-decorate --abbrev-commit
 
 time bench=True ./solve trash/samples/{6..1}-01
-947cfd5 [7s ] unwind "before/after" field order, add more hints (introduces a branch in data, it was for a feature)
+2bf61ed [5½s] remove needless copying
+e82739a [6¾s] simplify Unwind, use space hints without removing UnEquate
+6d08269 [7s ] solveIslandStatic
+947cfd5 [7s ] unwind "before/after" field order, add more hints
 af516fa [6¾s] fix bench bool check, don't verify if bench=True
 486871f [9s ] don't save space when solving determinstically (gc gains)
 d0192e4 [17s] unify space/unwinds
@@ -418,3 +421,8 @@ c98633d [30s] Configuration with MonadReader, remove compile conf flags
 ff70695 [32s] reuse flooder for islands
 a9c6fd6 [38s] store less data for islands
 9d4eea2 [50s] notes
+
+% time bench=True ./solve samples/6-*
+bench=True ./solve samples/6-*  113.72s user 2.90s system 99% cpu 1:57.11 total
+bench=True ./solve samples/6-*  109.02s user 2.97s system 99% cpu 1:52.16 total
+bench=True ./solve samples/6-*  88.12s user 2.96s system 99% cpu 1:31.09 total

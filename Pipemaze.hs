@@ -168,10 +168,11 @@ import System.IO (hFlush, stdout)
 -- Instead, you can force the backtracker to only count the solutions of a single island with 'cBounds'.
 -- If you group the solutions ('islandConnectivityRefinement'), many islands have a single best or equivalent solution.
 -- 'solveTrivialIslands' runs the backtracker for all "simple" islands, then recomputes all islands, then repeats.
--- This is all that's necessary to solve all level 6 mazes pretty fast as far as I'm aware.
+-- The even simpler 'solveIslandStatic' solves all the pieces that remain the same in all 'IslandSolution's.
+-- Running either solves level 6 very fast and 'solveIslandStatic' (+ 'solve') is a little faster.
 --
 -- Grouping in 'islandConnectivityRefinement' takes place in two steps: group by equal 'Components',
--- refine 'icComponents' by their partition 'PartialOrd'.
+-- refine 'icConnections' by their partition 'PartialOrd'.
 
 -- $bugs
 -- * `partId`/`origin` is a little awkward, but `pipe`/`char` is even more so
@@ -335,7 +336,7 @@ data IslandSolution = IslandSolution
   -- { icProgess :: Progress
   { icConnections :: [Set PartId] -- the surrounding 'PartId' partition (induces a PartialOrd)
   , icComponents :: IntMap Int
-  , icHints :: [Unwind] -- ^ forces the backtracker choose solution
+  , icHints :: [Unwind] -- ^ forces the backtracker to choose this solution
   } deriving (Show, Eq, Ord, Generic)
 
 instance PartialOrd IslandSolution where
