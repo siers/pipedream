@@ -382,30 +382,32 @@ ghc Main.hs -o solve && time ./solve trash/samples/5-{01..20} trash/samples/3-{0
 ./solve trash/samples/5-{01..20} trash/samples/3-{01..20}  24.55s user 0.94s system 99% cpu 25.498 total
 
 time ./solve trash/samples/{5,3}-{01..20}
-93f6c25 [53s] simpler prioritizeContinues
-dd7471e [52s] optimize deterministic solve (small, but noticable gains)
-acbdfde [54s] the big solve (first lvl6 solve)
-3b8f70c [37s] compute island graph nodes
-f53e788 [27s] fix deterministic recursion guard
-49687c3 [27s] Compute island choices, use for Continue.area
-4705e4a [25s] constraints data type
-eb8686e [25s] enable computing all solutions
-c45a1d9 [25s] update notes
-ab65f11 [25s] Clean up solve', clean up pieceDead, remove useless computation
-8af8dca [25s] backtracking with Maybe (for splitting stack)
-5c19196 [25s] show graph articulation points
-d28ee3d [25s] make graph validation possible upon backtracking
-7355ae6 [25s] IntMap Set -> IntMap IntSet
-514146e [25s] data Island
-1b72166 [25s] more readable rescoreContinue
-f3f02b2 [25s] prioritizeContinues: expose modify
-c55febf [25s] Use IntMap/Fursor for Continues
-23ffb80 [31s] bit-packed Choices with saved "next"
 9179cfd [39s] fix recursion guard
+23ffb80 [31s] bit-packed Choices with saved "next"
+c55febf [25s] Use IntMap/Fursor for Continues
+f3f02b2 [25s] prioritizeContinues: expose modify
+1b72166 [25s] more readable rescoreContinue
+514146e [25s] data Island
+7355ae6 [25s] IntMap Set -> IntMap IntSet
+d28ee3d [25s] make graph validation possible upon backtracking
+5c19196 [25s] show graph articulation points
+8af8dca [25s] backtracking with Maybe (for splitting stack)
+ab65f11 [25s] Clean up solve', clean up pieceDead, remove useless computation
+c45a1d9 [25s] update notes
+eb8686e [25s] enable computing all solutions
+4705e4a [25s] constraints data type
+49687c3 [27s] Compute island choices, use for Continue.area
+f53e788 [27s] fix deterministic recursion guard
+3b8f70c [37s] compute island graph nodes
+acbdfde [54s] the big solve (first lvl6 solve)
+dd7471e [52s] optimize deterministic solve (small, but noticable gains)
+93f6c25 [53s] simpler prioritizeContinues
 
 git log --format=oneline -1 --no-decorate --abbrev-commit
 
 time bench=True ./solve trash/samples/{6..1}-01
+db350d1 [3₀s] with parallel
+daee4b8 [5½s] fix all hlint warnings
 2bf61ed [5½s] remove needless copying
 e82739a [6¾s] simplify Unwind, use space hints without removing UnEquate
 6d08269 [7s ] solveIslandStatic
@@ -426,3 +428,4 @@ a9c6fd6 [38s] store less data for islands
 bench=True ./solve samples/6-*  113.72s user 2.90s system 99% cpu 1:57.11 total
 bench=True ./solve samples/6-*  109.02s user 2.97s system 99% cpu 1:52.16 total
 bench=True ./solve samples/6-*  88.12s user 2.96s system 99% cpu 1:31.09 total
+bench=True ./solve samples/6-*  128.55s user 32.91s system 333% cpu 48.354 total # parallel -N4

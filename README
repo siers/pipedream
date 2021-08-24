@@ -1,7 +1,8 @@
 Pipemaze.hs   this is the solver
-notes         scratchpad
+notes         scratchpad & benchmark data
 samples/      here are the samples
 problems/     tiny files for ironing out problems
+shell.nix     declares all dependencies in nix
 
 http://raitis.veinbahs.lv/maze/doc/Pipemaze.html
 
@@ -19,19 +20,30 @@ fun things to do for visualizations:
   screw with the score variable in sortContinues (this will likely lead to bad solve times)
   increase the frequency to see more intermediate steps
 
+environment variables
+  websocket=maze-server-host/websocket-path/#1,2,3,4,5,6,6,6
+  hide=True  # hides passwords
+  bench=True # skips debug output/image creation
+  debug=0    # debug modes: 0=show %, 1=print maze, 2=print color maze, 3=2+clear screen, 4=make image, 5=images only during islands
+  freq=10377 # call debug routine once every $freq iterations
+
 --
 
+benchmarking
+  % time ghc Main.hs -o solve && time bench=True ./solve ./samples/6-01
+  % time ghc Main.hs -o solve -threaded -with-rtsopts='-N4' && time bench=True ./solve trash/samples/{6..1}-01
+
 with profiler
-  % ghc -prof -fprof-auto -rtsopts solve -with-rtsopts='-p' -fexternal-interpreter && ./solve < samples/1
+  % ghc Main.hs -o solve -prof -fprof-auto -rtsopts -with-rtsopts='-p' -fexternal-interpreter && bench=True ./solve samples/5
 
 print trace of crash
-  % ghc Main.hs -o solve -prof -with-rtsopts='-xc' && ./solve < samples/2
+  % ghc Main.hs -o solve -prof -with-rtsopts='-xc' && ./solve samples/2
 
 restrict heap
-  $ ghc Main.hs -o solve -rtsopts -with-rtsopts='-M1024m' && ./solve < samples/3
+  $ ghc Main.hs -o solve -rtsopts -with-rtsopts='-M1024m' && ./solve samples/3
 
 run 8 cores
-  % ghc Main.hs -o solve -threaded -with-rtsopts='-N8' && time ./solve < ./samples/3
+  % ghc Main.hs -o solve -threaded -with-rtsopts='-N8' && time ./solve ./samples/3
 
 :l solve without having to resolve all type errors (amazing!)
   % ghci -fdefer-type-errors
