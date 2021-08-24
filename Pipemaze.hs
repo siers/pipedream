@@ -111,7 +111,7 @@ import qualified Data.POSet as POSet
 import qualified Data.Set as Set
 import qualified Data.Vector.Storable as V
 import qualified Data.Vector.Storable.Mutable as MV
-import System.Clock (getTime, Clock(Monotonic), diffTimeSpec, toNanoSecs)
+import System.Clock (getTime, Clock(Monotonic), diffTimeSpec, toNanoSecs, TimeSpec)
 import System.Environment (lookupEnv, getArgs)
 import System.Directory (createDirectoryIfMissing)
 import Text.Printf (printf)
@@ -217,6 +217,7 @@ data MMaze = MMaze
   , level :: Int
   , trivials :: [Fursor] -- ^ cursors of the edge and @X@ pieces which have only one valid rotation
   , mazeId :: String -- ^ 'board's data scrambled into a 4-byte hexadecimal field
+  , time :: TimeSpec
   } deriving (Eq, Ord, Generic)
 
 data Piece = Piece
@@ -388,7 +389,8 @@ iterateMaybeM n f x = fmap (False, ) $
 
 parse :: String -> IO MMaze
 parse input = do
-  maze <- (\b -> MMaze b width height size zeros level [] mazeId) <$> V.thaw (V.fromList (map snd board))
+  time <- getTime Monotonic
+  maze <- (\b -> MMaze b width height size zeros level [] mazeId time) <$> V.thaw (V.fromList (map snd board))
   (\m -> trivialsL (const (trivials m)) m) =<< boardL (const (setDeltas maze)) =<< pure maze
   where
     mazeId = showHex (foldr (\a b -> (ord a + b) `mod` (2 ^ 16)) 0 input) ""
@@ -1099,8 +1101,7 @@ initProgress m@MMaze{trivials} =
 
 -- | Solver main, returns solved maze
 solve :: MMaze -> SolverT MMaze
-solve maze = do
-  time <- liftIO (getTime Monotonic)
+solve maze@MMaze{time} = do
   numCap <- liftIO getNumCapabilities
 
   p <- initSolve maze numCap
