@@ -1125,7 +1125,8 @@ solve maze@MMaze{time} = do
   maze <$ renderImage' "done" p
 
   where
-    initSolve m@MMaze{level=6} n | n > 1 = componentRecalc False =<< renderImage' "parallel" =<< solveDetParallel n m
+    initSolve m@MMaze{level} n | n > 1 && elem level [4, 5, 6] =
+      componentRecalc False =<< renderImage' "parallel" =<< solveDetParallel n m
     initSolve m _ = initProgress m
 
 solveIO :: MMaze -> IO MMaze

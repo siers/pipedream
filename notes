@@ -406,7 +406,8 @@ dd7471e [52s] optimize deterministic solve (small, but noticable gains)
 git log --format=oneline -1 --no-decorate --abbrev-commit
 
 time bench=True ./solve trash/samples/{6..1}-01
-db350d1 [3₀s] with parallel
+21ff6bb [2¾s] solve levels 4/5 in parallel as well
+db350d1 [3₀s] update docs, document parallel benchmark times
 daee4b8 [5½s] fix all hlint warnings
 2bf61ed [5½s] remove needless copying
 e82739a [6¾s] simplify Unwind, use space hints without removing UnEquate
