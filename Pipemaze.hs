@@ -77,9 +77,9 @@ import Control.Concurrent (getNumCapabilities)
 import Control.Lens (Setter', (&), (%~), set, _1, _2, _head, _Just)
 import Control.Monad.Extra (allM, whenM)
 import Control.Monad.IO.Class (MonadIO(..), liftIO)
-import Control.Monad (join, filterM, void, when, mfilter, liftM, replicateM)
+import Control.Monad (join, filterM, void, unless, when, mfilter, replicateM, (<=<))
 import Control.Monad.Primitive (RealWorld)
-import Control.Monad.Reader (MonadReader(..), Reader, ReaderT(..), ask, withReaderT, mapReaderT)
+import Control.Monad.Reader (MonadReader(..), Reader, ReaderT(..), ask, asks, withReaderT, mapReaderT)
 import Control.Monad.Trans.State.Strict (StateT(..))
 import Data.Char (ord)
 import Data.Foldable (traverse_, for_, foldlM, fold)
@@ -343,12 +343,12 @@ instance PartialOrd IslandSolution where
   IslandSolution{icConnections=as} `leq` IslandSolution{icConnections=bs} =
     all (flip any bs . Set.isSubsetOf) as
 
-makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''MMaze
-makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Piece
-makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Continue
-makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Progress
-makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Configuration
-makeFieldOptics lensRules { _fieldToDef = (\_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase) } ''Island
+makeFieldOptics lensRules { _fieldToDef = \_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase } ''MMaze
+makeFieldOptics lensRules { _fieldToDef = \_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase } ''Piece
+makeFieldOptics lensRules { _fieldToDef = \_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase } ''Continue
+makeFieldOptics lensRules { _fieldToDef = \_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase } ''Progress
+makeFieldOptics lensRules { _fieldToDef = \_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase } ''Configuration
+makeFieldOptics lensRules { _fieldToDef = \_ _ -> (:[]) . TopName . mkName . (++ "L") . nameBase } ''Island
 
 toSolverT = mapReaderT (pure . runIdentity)
 determinstically = withReaderT (set cModeL SolveDeterministic)
@@ -357,7 +357,7 @@ determinsticallyI = withReaderT (set cModeL SolveIslandDeterministic) -- for isl
 confDefault = Configuration
   { cDebug = 0
   , cDebugFreq = 10377
-  , cLifespan = (-1)
+  , cLifespan = - 1
   , cMode = SolveNormal
   , cBounds = Nothing
   , cBench = False
@@ -381,22 +381,22 @@ instance ToJSON IslandSolution
 -- | Monadic equivalent to 'iterate', which uses Maybe to know when to terminate.
 iterateMaybeM :: Monad m => Int -> (a -> m (Maybe a)) -> a -> m (Bool, [a])
 iterateMaybeM 0 _ _ = pure (True, [])
-iterateMaybeM n f x = fmap ((False, )) $
-  maybe (return []) (\x' -> ((x':) . snd) `liftM` iterateMaybeM (n - 1) f x') =<< f x
+iterateMaybeM n f x = fmap (False, ) $
+  maybe (return []) (\x' -> ((x':) . snd) `fmap` iterateMaybeM (n - 1) f x') =<< f x
 
 {--- MMaze and Matrix operations ---}
 
 parse :: String -> IO MMaze
 parse input = do
-  maze <- (\b -> (MMaze b width height size zeros level [] mazeId)) <$> V.thaw (V.fromList (map snd board))
+  maze <- (\b -> MMaze b width height size zeros level [] mazeId) <$> V.thaw (V.fromList (map snd board))
   (\m -> trivialsL (const (trivials m)) m) =<< boardL (const (setDeltas maze)) =<< pure maze
   where
     mazeId = showHex (foldr (\a b -> (ord a + b) `mod` (2 ^ 16)) 0 input) ""
     rect :: [[Pix]] = filter (not . null) . map (map toPix) . lines $ input
-    board = map piece . zip [0..] . join $ rect
+    board = zipWith (curry piece) [0..] . join $ rect
     piece (fc, p) = (fc, Piece p False fc False 0)
 
-    (width, height) = (length (head rect), (length rect))
+    (width, height) = (length (head rect), length rect)
     size = width * height
     zeros = floor (logBase 10 (fromIntegral size) + 1.5)
     level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)])
@@ -417,7 +417,7 @@ mazeStore m label = liftIO (writeFile label =<< renderStr m)
 
 {-# INLINE mazeBounded #-}
 mazeBounded :: MMaze -> Cursor -> Bool
-mazeBounded MMaze{width, height} c = mazeBounded' width height c
+mazeBounded MMaze{width, height} = mazeBounded' width height
 
 mazeBounded' :: Int -> Int -> Cursor -> Bool
 mazeBounded' width height (!x, !y) = x >= 0 && y >= 0 && width > x && height > y
@@ -505,12 +505,13 @@ partEquate maze v = loop' =<< find v
 -- | Generate uncolorized output
 renderStr :: MMaze -> IO String
 renderStr MMaze{board, width, height} =
-  unlines . map (concat . map (return . toChar . pipe)) . vectorLists width height . V.convert <$> V.freeze board
+  unlines . map (concatMap (return . toChar . pipe)) . vectorLists width height . V.convert <$> V.freeze board
 
+{- HLINT ignore renderImage -}
 renderImage :: MonadIO m => String -> MMaze -> Continues -> m ()
 renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
   mcanvas <- thaw canvas :: IO (MImage RealWorld VU RGB Double)
-  traverse (drawPiece mcanvas) grid
+  traverse_ (drawPiece mcanvas) grid
   writeImage fn =<< freeze mcanvas
   where
     (pw, ph) = (3, 3)
@@ -542,25 +543,25 @@ renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
 -- | The output format is: @images/lvl%i-%s-%0*i-%s.png level mazeId (sizeLen iter) name@
 renderImage' :: String -> Progress -> SolverT Progress
 renderImage' name p@Progress{maze=maze@MMaze{sizeLen}, iter, continues} =
-  (p <$) . whenM (not . cBench <$> ask) $ do
-    dir <- cImageDir <$> ask
+  (p <$) . whenM (asks (not . cBench)) $ do
+    dir <- asks cImageDir
     renderImage (printf (dir ++ "%0*i-%s.png") sizeLen iter name) maze continues
 
 renderColorProgress :: MonadIO m => Maybe Continue -> Progress -> m String
 renderColorProgress _ Progress{maze=maze@MMaze{board, width, height}} = liftIO $ do
   lines <- vectorLists width height . V.convert <$> V.freeze board
-  pure . unlines . map concat =<< traverse (traverse fmt) lines
+  unlines . map concat <$> traverse (traverse fmt) lines
   where
     colorHash = (`mod` 70) . (+15) . (\(x, y) -> x * 67 + y * 23)
     fmt Piece{pipe, partId, solved} = do
-      color <- mfilter (\_ -> solved) . Just . colorHash . mazeCursor width <$> partEquate maze partId
+      color <- mfilter (const solved) . Just . colorHash . mazeCursor width <$> partEquate maze partId
       pure $ case color of
         Just color -> printf "\x1b[38;5;%im%c\x1b[39m" ([24 :: Int, 27..231] !! color) (toChar pipe)
-        _ -> (toChar pipe) : []
+        _ -> [toChar pipe]
 
 -- | Print unicode maze with colorized ANSI escape sequences to stdout.
 renderColor :: MonadIO m => MMaze -> m ()
-renderColor = liftIO . (putStrLn =<<) . renderColorProgress Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) []
+renderColor = liftIO . (putStrLn <=< renderColorProgress Nothing . Progress 0 0 IntMap.empty IntMap.empty (Components IntMap.empty) [])
 
 -- | Tracing at each @freq=@ step with @debug=@ environment variables.
 --
@@ -570,7 +571,7 @@ traceBoard :: Continue -> Progress -> SolverT Progress
 traceBoard current progress@Progress{iter=iter', depth, maze=maze@MMaze{size}} = do
   Configuration{cDebug, cDebugFreq} <- ask
   islands <-
-    if iter `mod` (max 1 (cDebugFreq `div` islandSlowdown)) == 0
+    if iter `mod` max 1 (cDebugFreq `div` islandSlowdown) == 0
     then any ((> 0) . island) <$> toSolverT (findContinue progress)
     else pure False
   progress <$ tracer cDebug (max 1 (cDebugFreq `div` (if islands then islandSlowdown else 1))) islands
@@ -581,13 +582,13 @@ traceBoard current progress@Progress{iter=iter', depth, maze=maze@MMaze{size}} =
       | iter `mod` freq == 0 && mode == 0 = liftIO $ putStrLn solvedStr
       | iter `mod` freq == 0 && mode == 1 = liftIO $ renderStr maze >>= putStrLn
       | iter `mod` freq == 0 && mode == 2 = liftIO $ traceStr >>= putStrLn
-      | iter `mod` freq == 0 && mode == 3 = liftIO $ ((clear ++) <$> traceStr) >>= putStrLn
-      | iter `mod` freq == 0 && mode == 4 = tracer 1 freq False >> void (renderImage' ("trace") progress)
+      | iter `mod` freq == 0 && mode == 3 = liftIO $ traceStr >>= putStrLn . (clear ++)
+      | iter `mod` freq == 0 && mode == 4 = tracer 1 freq False >> void (renderImage' "trace" progress)
       | iter `mod` freq == 0 && mode == 5 = if islandish then tracer 4 freq True else pure ()
-      | True = pure ()
+      | otherwise = pure ()
 
-    perc = (fromIntegral $ depth) / (fromIntegral size) * 100 :: Double
-    ratio = (fromIntegral iter / fromIntegral depth :: Double)
+    perc = fromIntegral depth / fromIntegral size * 100 :: Double
+    ratio = fromIntegral iter / fromIntegral depth :: Double
     solvedStr = printf "\x1b[2Ksolved: %02.2f%%, ratio: %0.2f\x1b[1A" perc ratio
 
     clear = "\x1b[H\x1b[2K" -- move cursor 1,1; clear line
@@ -637,11 +638,11 @@ pixRotations _ = rotations
 
 {-# INLINE pixDirections #-}
 pixDirections :: Bit.Bits p => p -> [Direction]
-pixDirections b = foldMap (\n -> if b `Bit.testBit` n then [n] else []) [0, 1, 2, 3]
+pixDirections b = foldMap (\n -> [n | b `Bit.testBit` n]) [0, 1, 2, 3]
 
 {-# INLINE pixNDirections #-}
 pixNDirections :: Bit.Bits p => p -> [Direction]
-pixNDirections b = foldMap (\n -> if b `Bit.testBit` n then [] else [n]) [0, 1, 2, 3]
+pixNDirections b = foldMap (\n -> [n | not (b `Bit.testBit` n)]) [0, 1, 2, 3]
 
 {-# INLINE directionsPix #-}
 directionsPix :: Integral i => [Direction] -> i
@@ -698,8 +699,8 @@ forceChoice forced pix choices =
     exceptSolveds = Bit.shiftL 0b1111 choicesSolveds
   in
     (exceptSolveds Bit..&. choices)
-    + (Bit.shiftL 1 choicesCount)
-    + (Bit.shiftL (0b1111 `Bit.xor` Bit.bit rotatation) choicesInvalid)
+    + Bit.shiftL 1 choicesCount
+    + Bit.shiftL (0b1111 `Bit.xor` Bit.bit rotatation) choicesInvalid
 
 {-# INLINE forcePiece #-}
 forcePiece :: Pix -> Piece -> Piece
@@ -710,7 +711,7 @@ forceContinue :: Pix -> Continue -> Continue
 forceContinue dst c@Continue{char=src} = (choicesL %~ forceChoice dst src) c
 
 forceHints :: Continues -> Progress -> [Unwind] -> SolverT Progress
-forceHints continues p@Progress{maze} hints = foldlM deployHint p hints
+forceHints continues p@Progress{maze} = foldlM deployHint p
   where
     deployHint p (UnSolve c _ pix) =
       if IntMap.member c continues
@@ -723,11 +724,11 @@ forceHints continues p@Progress{maze} hints = foldlM deployHint p hints
 {-# INLINE compInsert #-}
 compInsert :: Continue -> Components -> Components
 compInsert Continue{origin} (Components c) = Components (IntMap.insertWith (+) origin 1 c)
-compInsert Continue{origin, cursor} (Components' c) = Components' (IntMap.insertWith (IntSet.union) origin (IntSet.singleton cursor) c)
+compInsert Continue{origin, cursor} (Components' c) = Components' (IntMap.insertWith IntSet.union origin (IntSet.singleton cursor) c)
 
 {-# INLINE compRemove #-}
 compRemove :: PartId -> Fursor -> Components -> Components
-compRemove origin _cursor (Components c) = Components (IntMap.update (Just . (subtract 1)) origin c)
+compRemove origin _cursor (Components c) = Components (IntMap.update (Just . subtract 1) origin c)
 compRemove origin cursor (Components' c) = Components' (IntMap.update (Just . IntSet.delete cursor) origin c)
 
 {-# INLINE compEquate #-}
@@ -768,11 +769,11 @@ deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initCho
   let pointed = char `Bit.testBit` from
   let origin' = if pointed then origin else c
   let island' = min 4 (island * 2) -- islands get bumped once to set area, next time to solve islands whole
-  let dir = ((from + 2) `mod` 4)
+  let dir = (from + 2) `mod` 4
 
   let initChoices' = maybe initChoices choices prev
   let validRot = pixNDirections (initChoices' `Bit.shiftR` choicesInvalid)
-  let invalids = filter (\r -> pointed /= (Bit.testBit (rotate r pipe) dir)) validRot
+  let invalids = filter (\r -> pointed /= Bit.testBit (rotate r pipe) dir) validRot
   let choices' :: Int = foldr (\d s -> s - Bit.bit choicesCount + Bit.bit (choicesInvalid + d)) initChoices' invalids
   let solveds = Bit.bit (dir + choicesSolveds)
   -- let require = fromEnum pointed `Bit.shiftL` (dir + choicesRequire) -- not used
@@ -783,7 +784,7 @@ deltaContinue Continue{char, origin, island, area} id c from Piece{pipe, initCho
 -- | Calls 'prioritizeContinue' on nearby pieces (delta = 1)
 prioritizeDeltas :: Width -> Progress -> Continue -> SolverT Progress
 prioritizeDeltas width p@Progress{iter, maze} continue@Continue{cursor=cur, choices} = do
-  (toSolverT . prioritizeContinues p =<<) . for (zip [0..] (pixNDirections choices)) $ \(i, d) -> do
+  (toSolverT . prioritizeContinues p) <=< for (zip [0..] (pixNDirections choices)) $ \(i, d) -> do
     piece <- mazeRead maze (mazeFDelta width cur d)
     let delta = mazeFDelta width cur d
     pure (delta, deltaContinue continue (iter * 4 + i) delta d piece)
@@ -820,7 +821,7 @@ prioritizeContinue' width (p, cp, ct) c get =
 -- | Inserts or reprioritizes 'Continue'
 prioritizeContinues :: Progress -> [(Fursor, Maybe Continue -> Continue)] -> Solver Progress
 prioritizeContinues progress@Progress{maze=MMaze{width}, priority, continues, components} reprios =
-  putback <$> (foldlM prio (priority, components, continues) reprios)
+  putback <$> foldlM prio (priority, components, continues) reprios
   where
     putback (p, cp, cn) = progress { priority = p, components = cp, continues = cn }
     prio acc (c, get) = prioritizeContinue' width acc c get
@@ -880,17 +881,18 @@ islandize p@Progress{continues} = toSolverT $ do
 islandConnectivityRefinement :: [IslandSolution] -> [IslandSolution]
 islandConnectivityRefinement = POSet.lookupMax . POSet.fromList . map head . groupSortOn icComponents
 
+{- HLINT ignore islandChoices "Redundant bang pattern" -}
 -- | Computes and set 'iChoices'/'iSolutions' for the island, but also modifies maze with 'icHints' if len choices == 1.
 islandChoices :: MMaze -> Progress -> Island -> SolverT Island
 islandChoices _ Progress{components=Components _} _ = error "not enough info, unlikely"
 islandChoices maze' p@Progress{maze, components=Components' compInit} i@Island{iBounds} = do
   !(capped, solutions) <- iterateMaybeM 1000 (solution . fst) . (, []) =<< toSolverT (islandProgress p i maze')
-  !solutions <- islandConnectivityRefinement . join . map snd <$> pure solutions
-  when capped $ liftIO (MV.unsafeCopy (board maze') (board maze)) -- this copies much more than it needs to
+  !solutions <- pure (islandConnectivityRefinement . join . map snd $ solutions)
+  when capped $ liftIO (MV.unsafeCopy (board maze') (board maze)) -- this copies much more than it needs to, but rarely
 
   pure (i & set iChoicesL (length solutions) & set iSolutionsL solutions)
   where
-    constrain c = c { cLifespan = (-1), cBounds = Just (`IntSet.member` iBounds), cBench = True }
+    constrain c = c { cLifespan = - 1, cBounds = Just (`IntSet.member` iBounds), cBench = True }
 
     solution :: Progress -> SolverT (Maybe (Progress, [IslandSolution]))
     solution p = withReaderT constrain (solve' p) >>= traverse (\p -> (p, ) . pure <$> islandSolution p)
@@ -915,13 +917,13 @@ islands Progress{maze=maze@MMaze{width}, continues} = do
   where
     foldIsland perIsland continues =
       (\acc -> foldlM acc (Set.empty, []) continues) $ \acc@(visited, _) cursor ->
-        if (cursor `Set.member` visited) then pure acc else perIsland cursor acc
+        if cursor `Set.member` visited then pure acc else perIsland cursor acc
 
     -- border = island's border by continues
     perIsland :: MonadIO m => Cursor -> (Set Cursor, [Island]) -> m (Set Cursor, [Island])
     perIsland cursor (visited, islands) = do
       (area, borders) <- flood (fillNextSolved continues) maze cursor
-      let iConts = (continues IntMap.!) . mazeFursor width <$> (Set.toList borders)
+      let iConts = (continues IntMap.!) . mazeFursor width <$> Set.toList borders
       let iBounds = IntSet.fromList . map (mazeFursor width) . Set.toList $ area
       let island = Island (maybe 0 (\(x, y) -> x + y * width) (Set.lookupMin borders)) (Set.size area) iConts iBounds [] 0
       pure (visited `Set.union` borders, island : islands)
@@ -940,7 +942,7 @@ islandHinting islands p@Progress{continues} = do
     reduceM a l f = foldlM f a l
 
     unique []      = []
-    unique (a:[])  = [a]
+    unique [a]  = [a]
     unique (_:_:_) = []
 
 {--- Backtracking solver ---}
@@ -971,10 +973,10 @@ backtrack :: MonadIO m => Progress -> m (Maybe (Progress, Continue))
 backtrack Progress{space=[]} = pure Nothing
 backtrack p@Progress{space=(([], []):space)} =
   backtrack p { space }
-backtrack Progress{space=((((continue, p):guesses), []):space), maze, iter} = do
+backtrack Progress{space=(((continue, p):guesses, []):space), maze, iter} = do
   pure (Just (p { maze, iter, space = (guesses, []) : space }, continue))
 backtrack p@Progress{space=((guesses, unwind):space), maze} = do
-  traverse (mazePop maze) unwind
+  traverse_ (mazePop maze) unwind
   backtrack p { space = (guesses, []) : space }
 
 -- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
@@ -989,7 +991,7 @@ solve' progress@Progress{depth, maze=maze@MMaze{size}, components} = do
 
   unbounded <- null . join <$> toSolverT (traverse findContinue progress)
   let stop = depth == size - 1 || cLifespan == 0 || unbounded
-  withReaderT (cLifespanL %~ (subtract 1)) $ next stop progress
+  withReaderT (cLifespanL %~ subtract 1) $ next stop progress
   where
     next True = pure
     next False = fmap join . traverse solve'
@@ -1015,7 +1017,7 @@ componentRecalc deep p@Progress{maze, continues} = do
   where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
 
 islandChoicesParallel :: Progress -> [MMaze] -> [Island] -> SolverT [Island]
-islandChoicesParallel p (copy:[]) islands = for islands (islandChoices copy p)
+islandChoicesParallel p [copy] islands = for islands (islandChoices copy p)
 islandChoicesParallel p copies islands = do
   conf <- ask
   let numCap = length copies
@@ -1031,7 +1033,7 @@ solveDetParallel n m@MMaze{width} = do
   (Sum iter, continues) <- liftIO . fmap fold . parallelInterleaved . map (fmap progressExtract . solvePar conf) $ rest
   toSolverT (prioritizeContinues (zeroth { iter, depth = iter }) (map ((\c -> (cursor c, return c)) . snd) continues))
   where
-    solvePar conf = (\(n, p) -> fromJust <$> runReaderT (solve' p) (configuration conf n))
+    solvePar conf (n, p) = fromJust <$> runReaderT (solve' p) (configuration conf n)
     progressExtract Progress{iter, continues} = (Sum iter, IntMap.toList continues)
     configuration c n = c
       { cBounds = Just (\f -> mazeQuadrant m (mazeCursor width f) == n)
@@ -1068,7 +1070,7 @@ solveTrivialIslands copies is p@Progress{maze} = solveT =<< determinstically (to
   where
     solveT Nothing = pure p
     solveT (Just _) = do
-      (_space, solve) <- (spaceL ((,) =<< id)) . fromJust <$> determinsticallyI (solve' p)
+      (_space, solve) <- spaceL ((,) =<< id) . fromJust <$> determinsticallyI (solve' p)
       -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
       let islandUnsolved = fmap (not . solved) . mazeRead maze . cursor . head . iConts
       is <- islandChoicesParallel p copies =<< filterM islandUnsolved is
@@ -1080,7 +1082,7 @@ solveIslandStatic :: [Island] -> Progress -> SolverT Progress
 solveIslandStatic islands p@Progress{continues} =
   foldlM (\p _i@Island{iSolutions} -> forceHints continues p (uniqueHints iSolutions)) p islands
   where
-    uniqueHints (solution:[]) = map unwindEraseBefore (icHints solution)
+    uniqueHints [solution] = map unwindEraseBefore (icHints solution)
     uniqueHints solutions = Set.toList (solutionIntersection solutions)
 
     solutionIntersection = List.foldl1 Set.intersection . map (Set.fromList . map unwindEraseBefore . icHints)
@@ -1102,16 +1104,16 @@ solve maze = do
   numCap <- liftIO getNumCapabilities
 
   p <- initSolve maze numCap
-  p <- componentRecalc True =<< fmap fromJust (determinstically (solve' p))
+  p <- componentRecalc True . fromJust =<< determinstically (solve' p)
   renderImage' "islandize" p
 
   copies <- replicateM numCap (mazeClone maze)
   islands <- islandChoicesParallel p copies =<< islands p
-  p <- fmap (maybe p id) . determinstically . solve' =<< solveIslandStatic islands p
+  p <- fmap (fromMaybe p) . determinstically . solve' =<< solveIslandStatic islands p
   renderImage' "islandize-static" p
   -- p <- solveTrivialIslands copies islands =<< islandHinting islands =<< islandize p
 
-  p <- fmap (maybe p id) (solve' p)
+  p <- fmap (fromMaybe p) (solve' p)
 
   time' <- diffTimeSpec <$> liftIO (getTime Monotonic) <*> pure time
   let Progress{iter, depth, maze} = p
@@ -1132,7 +1134,7 @@ solveIO m = configuration m >>= runReaderT (solve m)
 verify :: MMaze -> SolverT Bool
 verify maze@MMaze{board, size} = do
   (Sum spaces) <- V.foldl' (flip (mappend . Sum . (fromEnum . (== 0) . pipe))) mempty <$> V.freeze board
-  required <- not . cBench <$> ask
+  required <- asks (not . cBench)
   if required
   then (size - spaces ==) . Set.size . fst <$> flood fillNextValid maze (0, 0)
   else pure True
@@ -1168,13 +1170,13 @@ rotateStr split input solved =
 -- | Create 'Configuration' from environment variables, create image output directory.
 configuration :: MMaze -> IO Configuration
 configuration MMaze{mazeId, level} = do
-  let mazeDir :: String = printf ("lvl%i-%s") level mazeId
+  let mazeDir :: String = printf "lvl%i-%s" level mazeId
   imageDir :: String <- formatTime defaultTimeLocale ("images/%F-%H-%M-%S-" ++ mazeDir ++ "/") <$> getCurrentTime
   conf <- set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure confDefault { cImageDir = imageDir }
-  (conf <$) . when (not . cBench $ conf) $ createDirectoryIfMissing True imageDir
+  (conf <$) . unless (cBench conf) $ createDirectoryIfMissing True imageDir
   where
     set :: Read a => Setter' s a -> String -> s -> IO s
-    set setter env s = (\v' -> (setter %~ (flip fromMaybe (read <$> v'))) s) <$> lookupEnv env
+    set setter env s = (\v' -> (setter %~ (`fromMaybe` (read <$> v'))) s) <$> lookupEnv env
 
 -- | Gets passwords for solved levels from the maze server.
 pļāpātArWebsocketu :: [Int] -> Bool -> WS.ClientApp ()
@@ -1212,7 +1214,7 @@ main :: IO ()
 main = run . fmap parseUrl =<< lookupEnv "websocket"
   where
     run (Just (host, path, levels)) = do
-      hide <- any (True ==) . fmap read <$> lookupEnv "hide"
+      hide <- or . fmap read <$> lookupEnv "hide"
       withSocketsDo $ WS.runClient host 80 path (pļāpātArWebsocketu levels hide)
     run Nothing =
       traverse_ solveFile . (\args -> if null args then ["/dev/stdin"] else args) =<< getArgs
@@ -1221,7 +1223,7 @@ main = run . fmap parseUrl =<< lookupEnv "websocket"
     parseUrl s =
       case splitOn "/" s of
         (host:rest) ->
-          case splitOn "#" ("/" ++ (join (intersperse "/" rest))) of
-            (path:levels:[]) -> (host, path, map read (splitOn "," levels))
+          case splitOn "#" ("/" ++ join (intersperse "/" rest)) of
+            [path, levels] -> (host, path, map read (splitOn "," levels))
             _ -> error "usage: websocket=maze.host/1,2,3,4,5,6"
         _ -> error "usage: websocket=maze.host/1,2,3,4,5,6"

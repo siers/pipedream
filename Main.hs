@@ -1,1 +1,1 @@
-module Main (main) where import Pipemaze
+module Main (main) where import Pipemaze (main)
