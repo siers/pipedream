@@ -59,7 +59,7 @@ module Pipemaze (
   -- * Backtracker
   , solveContinue, backtrack, solve'
   -- * Metasolver
-  , componentRecalc, islandChoicesParallel, solveDetParallel, initProgress, solve
+  , islandChoicesParallel, solveDetParallel, initProgress, solve
   -- * Main
   , verify, storeBad, rotateStr, configuration, pļāpātArWebsocketu, solveFile, main
 ) where
@@ -313,6 +313,7 @@ data Configuration = Configuration
   , cBounds :: Bounds -- ^ forces the solver to stay within bounds
   , cBench :: Bool
   , cImageDir :: String
+  , cNumCap :: Int
   } -- deriving (Show, Eq, Ord, Generic)
 
 type SolverT = ReaderT Configuration IO
@@ -363,6 +364,7 @@ confDefault = Configuration
   , cBounds = Nothing
   , cBench = False
   , cImageDir = "images/"
+  , cNumCap = 1
   }
 
 -- | unlawful
@@ -1021,11 +1023,15 @@ componentRecalc deep p@Progress{maze, continues} = do
 islandChoicesParallel :: Progress -> [MMaze] -> [Island] -> SolverT [Island]
 islandChoicesParallel p [copy] islands = for islands (islandChoices copy p)
 islandChoicesParallel p copies islands = do
-  conf <- ask
-  let numCap = length copies
-  let islandChunks = zip copies . transpose . chunksOf numCap $ islands
+  conf@Configuration{cNumCap} <- ask
+  let islandChunks = zip copies . transpose . chunksOf cNumCap $ islands
   fmap join . liftIO . parallelInterleaved . flip map islandChunks $ \(copy, islands) ->
     for islands (flip runReaderT conf . islandChoices copy p)
+
+islandsWithChoices :: Progress -> SolverT ([Island], [MMaze])
+islandsWithChoices p@Progress{maze} = do
+  copies <- flip replicateM (mazeClone maze) =<< asks cNumCap
+  (, copies) <$> (islandChoicesParallel p copies =<< islands p)
 
 -- | Sovles deterministic parts of the maze in parallel.
 solveDetParallel :: Int -> MMaze -> SolverT Progress
@@ -1067,22 +1073,9 @@ solveDetParallel n m@MMaze{width} = do
             l = if x `mod` qx < 2 || y `mod` qy < 2 then 0 else 1
             wrap = (n + qy) `div` qy -- wrap x = ceiling (n / q)
 
-solveTrivialIslands :: [MMaze] -> [Island] -> Progress -> SolverT Progress
-solveTrivialIslands _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
-solveTrivialIslands copies is p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
-  where
-    solveT Nothing = pure p
-    solveT (Just _) = do
-      (_space, solve) <- spaceL ((,) =<< id) . fromJust <$> determinsticallyI (solve' p)
-      -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
-      let islandUnsolved = fmap (not . solved) . mazeRead maze . cursor . head . iConts
-      is <- islandChoicesParallel p copies =<< filterM islandUnsolved is
-      -- liftIO . print . List.sortOn fst . map (\x -> (head x, length x)) . groupSortOn id . map iChoices $ is
-      solveTrivialIslands copies [] =<< islandHinting is solve
-
 -- | Solve all island's pieces which remain the same in all solutions.
-solveIslandStatic :: [Island] -> Progress -> SolverT Progress
-solveIslandStatic islands p@Progress{continues} =
+islandStaticHints :: [Island] -> Progress -> SolverT Progress
+islandStaticHints islands p@Progress{continues} =
   foldlM (\p _i@Island{iSolutions} -> forceHints continues p (uniqueHints iSolutions)) p islands
   where
     uniqueHints [solution] = map unwindEraseBefore (icHints solution)
@@ -1100,34 +1093,54 @@ initProgress m@MMaze{trivials} =
     continue (i, c) = (\Piece{pipe, initChoices} -> (c, return (Continue c pipe c 0 (-i) 0 0 initChoices))) <$> mazeRead m c
   in toSolverT . prioritizeContinues p =<< traverse continue (zip [0..] trivials)
 
+-- | First deterministic, possibly parallel run-through solve stage.
+solveBasic :: MMaze -> SolverT Progress
+solveBasic maze = do
+  p <- initSolve maze =<< asks cNumCap
+  p <- componentRecalc True . fromJust =<< determinstically (solve' p)
+  renderImage' "islandize" p
+  where
+    initSolve m@MMaze{level} n | n > 1 && 4 <= level =
+      componentRecalc False =<< renderImage' "parallel" =<< solveDetParallel n m
+    initSolve m _ = initProgress m
+
+solveIslandStatic :: Progress -> SolverT Progress
+solveIslandStatic p = do
+  (islands, _) <- islandsWithChoices p
+  p <- fmap (fromMaybe p) . determinstically . solve' =<< islandStaticHints islands p
+  renderImage' "islandize-static" p
+
+solveTrivialIslands :: Progress -> SolverT Progress
+solveTrivialIslands p@Progress{maze=MMaze{level}} | 6 >= level = pure p
+solveTrivialIslands p = do
+  (islands, copies) <- islandsWithChoices p
+  solveTrivialIslands' copies islands =<< islandHinting islands =<< islandize p
+  where
+    solveTrivialIslands' :: [MMaze] -> [Island] -> Progress -> SolverT Progress
+    solveTrivialIslands' _ _ p@Progress{depth, maze=MMaze{size}} | depth == size = pure p
+    solveTrivialIslands' copies islands p@Progress{maze} = solveT =<< determinstically (toSolverT (findContinue p))
+      where
+        solveT Nothing = pure p
+        solveT (Just _) = do
+          (_space, solve) <- spaceL ((,) =<< id) . fromJust <$> determinsticallyI (solve' p)
+          islands <- filterM (fmap (not . solved) . mazeRead maze . cursor . head . iConts) islands
+          islands <- islandChoicesParallel p copies islands
+          solveTrivialIslands' copies [] =<< islandHinting islands solve
+
+-- | Solve with backtracking, return the same maze, if search space exhausted.
+solveBacktrack :: Progress -> SolverT Progress
+solveBacktrack p = fmap (fromMaybe p) (solve' p)
+
 -- | Solver main, returns solved maze
 solve :: MMaze -> SolverT MMaze
 solve maze@MMaze{time} = do
-  numCap <- liftIO getNumCapabilities
-
-  p <- initSolve maze numCap
-  p <- componentRecalc True . fromJust =<< determinstically (solve' p)
-  renderImage' "islandize" p
-
-  copies <- replicateM numCap (mazeClone maze)
-  islands <- islandChoicesParallel p copies =<< islands p
-  p <- fmap (fromMaybe p) . determinstically . solve' =<< solveIslandStatic islands p
-  renderImage' "islandize-static" p
-  -- p <- solveTrivialIslands copies islands =<< islandHinting islands =<< islandize p
-
-  p <- fmap (fromMaybe p) (solve' p)
-
+  p <- solveBacktrack =<< solveTrivialIslands =<< solveIslandStatic =<< solveBasic maze
   time' <- diffTimeSpec <$> liftIO (getTime Monotonic) <*> pure time
   let Progress{iter, depth, maze} = p
   let ratio = fromIntegral iter / fromIntegral depth :: Double
   let runtime = fromIntegral (toNanoSecs time') / 1_000_000_000 :: Double
   liftIO (putStrLn (printf "\x1b[2K%i/%i, ratio: %0.5f, time: %0.2fs" iter depth ratio runtime))
   maze <$ renderImage' "done" p
-
-  where
-    initSolve m@MMaze{level} n | n > 1 && elem level [4, 5, 6] =
-      componentRecalc False =<< renderImage' "parallel" =<< solveDetParallel n m
-    initSolve m _ = initProgress m
 
 solveIO :: MMaze -> IO MMaze
 solveIO m = configuration m >>= runReaderT (solve m)
@@ -1175,7 +1188,8 @@ configuration :: MMaze -> IO Configuration
 configuration MMaze{mazeId, level} = do
   let mazeDir :: String = printf "lvl%i-%s" level mazeId
   imageDir :: String <- formatTime defaultTimeLocale ("images/%F-%H-%M-%S-" ++ mazeDir ++ "/") <$> getCurrentTime
-  conf <- set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure confDefault { cImageDir = imageDir }
+  conf <- cNumCapL (const getNumCapabilities) confDefault
+  conf <- set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure conf { cImageDir = imageDir }
   (conf <$) . unless (cBench conf) $ createDirectoryIfMissing True imageDir
   where
     set :: Read a => Setter' s a -> String -> s -> IO s
