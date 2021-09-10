@@ -859,6 +859,68 @@ popContinue :: Progress -> Progress
 popContinue p@Progress{priority=pr, continues=c} = p { priority, continues = IntMap.delete cursor c }
   where ((_, cursor), priority) = IntMap.deleteFindMin pr
 
+{--- Backtracking solver ---}
+
+-- | Solves a valid piece, mutates the maze and sets unwind.
+-- Inefficient access: partEquate reads the same data as islands reads.
+-- (All functions within this function are inlined)
+solveContinue :: Progress -> Continue -> SolverT Progress
+solveContinue
+  progress@Progress{maze=maze@MMaze{width}, components = components_}
+  continue@Continue{cursor, char, origin = origin_} = do
+    thisPart <- partEquate maze origin_
+    unwindThis <- mazeSolve maze continue
+    let directDeltas = map (mazeFDelta width cursor) $ pixDirections char
+    neighbours <- fmap (nubOrd . (thisPart :)) . traverse (partEquate maze) $ directDeltas
+    let origin = minimum neighbours
+    let components = compEquate origin (filter (/= origin) neighbours) (compRemove thisPart cursor components_)
+    unwindEquate <- mazeEquate maze origin neighbours
+
+    traceBoard continue . (iterL %~ (+1)) . (depthL %~ (+1))
+      . (spaceL . _head %~ (, unwindThis : unwindEquate) . fst)
+      =<< prioritizeDeltas width progress { components } continue { origin }
+
+-- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
+-- This returns a progress with the first available 'Continue' from 'space' or Nothing.
+-- If 'space' is empty, it gets popped, 'mazePop' gets called and it tries again until 'space' is empty.
+backtrack :: MonadIO m => Progress -> m (Maybe (Progress, Continue))
+backtrack Progress{space=[]} = pure Nothing
+backtrack p@Progress{space=(([], []):space)} =
+  backtrack p { space }
+backtrack Progress{space=(((continue, p):guesses, []):space), maze, iter} = do
+  pure (Just (p { maze, iter, space = (guesses, []) : space }, continue))
+backtrack p@Progress{space=((guesses, unwind):space), maze} = do
+  traverse_ (mazePop maze) unwind
+  backtrack p { space = (guesses, []) : space }
+
+-- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
+solve' :: Progress -> SolverT (Maybe Progress)
+solve' p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p) -- remove this to compute all solutions
+solve' progress@Progress{depth, maze=maze@MMaze{size}, components} = do
+  Configuration{cLifespan, cMode} <- ask
+  guesses <- liftIO . foldMap (guesses progress) . maybeToList =<< toSolverT (findContinue progress)
+  guess <- backtrack . (spaceL %~ if null guesses then id else ((guesses, []) :)) =<< pure progress
+  guess <- pure $ guess & _Just . _1 . spaceL %~ (if solveWithHistory cMode then id else init)
+  progress <- traverse (uncurry (solveContinue . popContinue)) guess
+
+  unbounded <- null . join <$> toSolverT (traverse findContinue progress)
+  let stop = depth == size - 1 || cLifespan == 0 || unbounded
+  withReaderT (cLifespanL %~ subtract 1) $ next stop progress
+  where
+    next True = pure
+    next False = fmap join . traverse solve'
+
+    guesses :: MonadIO m => Progress -> Continue -> m [(Continue, Progress)]
+    guesses progress continue@Continue{cursor, char, choices} = do
+      let rotations = pixNDirections (Bit.shiftR choices choicesInvalid)
+      rotations <- filterDisconnected (map (\r -> (cursor, rotate r char, choices)) rotations)
+      pure (map (\(_, pipe, _) -> (set charL pipe continue, progress)) rotations)
+
+    filterDisconnected :: MonadIO m => [(Fursor, Pix, Choices)] -> m [(Fursor, Pix, Choices)]
+    filterDisconnected = filterM $ \(cur, pix, choices) -> do
+      disconnected <- pieceDead maze components cur pix choices
+      pure ((depth == size - 1) || not disconnected)
+
 {--- Island computations ---}
 
 -- | The generic /paint/ of the 'flood' fill.
@@ -949,76 +1011,7 @@ islandHinting islands p@Progress{continues} = do
     unique [a]  = [a]
     unique (_:_:_) = []
 
-{--- Backtracking solver ---}
-
--- | Solves a valid piece, mutates the maze and sets unwind.
--- Inefficient access: partEquate reads the same data as islands reads.
--- (All functions within this function are inlined)
-solveContinue :: Progress -> Continue -> SolverT Progress
-solveContinue
-  progress@Progress{maze=maze@MMaze{width}, components = components_}
-  continue@Continue{cursor, char, origin = origin_} = do
-    thisPart <- partEquate maze origin_
-    unwindThis <- mazeSolve maze continue
-    let directDeltas = map (mazeFDelta width cursor) $ pixDirections char
-    neighbours <- fmap (nubOrd . (thisPart :)) . traverse (partEquate maze) $ directDeltas
-    let origin = minimum neighbours
-    let components = compEquate origin (filter (/= origin) neighbours) (compRemove thisPart cursor components_)
-    unwindEquate <- mazeEquate maze origin neighbours
-
-    traceBoard continue . (iterL %~ (+1)) . (depthL %~ (+1))
-      . (spaceL . _head %~ (, unwindThis : unwindEquate) . fst)
-      =<< prioritizeDeltas width progress { components } continue { origin }
-
--- | The initial 'Progress', 'space' stack, 'Progress' and 'MMaze' backtracking operations.
--- This returns a progress with the first available 'Continue' from 'space' or Nothing.
--- If 'space' is empty, it gets popped, 'mazePop' gets called and it tries again until 'space' is empty.
-backtrack :: MonadIO m => Progress -> m (Maybe (Progress, Continue))
-backtrack Progress{space=[]} = pure Nothing
-backtrack p@Progress{space=(([], []):space)} =
-  backtrack p { space }
-backtrack Progress{space=(((continue, p):guesses, []):space), maze, iter} = do
-  pure (Just (p { maze, iter, space = (guesses, []) : space }, continue))
-backtrack p@Progress{space=((guesses, unwind):space), maze} = do
-  traverse_ (mazePop maze) unwind
-  backtrack p { space = (guesses, []) : space }
-
--- | Solves pieces by backtracking, stops when the maze is solved or constraints met.
-solve' :: Progress -> SolverT (Maybe Progress)
-solve' p@Progress{depth, maze=MMaze{size}} | depth == size = pure (Just p) -- remove this to compute all solutions
-solve' progress@Progress{depth, maze=maze@MMaze{size}, components} = do
-  Configuration{cLifespan, cMode} <- ask
-  guesses <- liftIO . foldMap (guesses progress) . maybeToList =<< toSolverT (findContinue progress)
-  guess <- backtrack . (spaceL %~ if null guesses then id else ((guesses, []) :)) =<< pure progress
-  guess <- pure $ guess & _Just . _1 . spaceL %~ (if solveWithHistory cMode then id else init)
-  progress <- traverse (uncurry (solveContinue . popContinue)) guess
-
-  unbounded <- null . join <$> toSolverT (traverse findContinue progress)
-  let stop = depth == size - 1 || cLifespan == 0 || unbounded
-  withReaderT (cLifespanL %~ subtract 1) $ next stop progress
-  where
-    next True = pure
-    next False = fmap join . traverse solve'
-
-    guesses :: MonadIO m => Progress -> Continue -> m [(Continue, Progress)]
-    guesses progress continue@Continue{cursor, char, choices} = do
-      let rotations = pixNDirections (Bit.shiftR choices choicesInvalid)
-      rotations <- filterDisconnected (map (\r -> (cursor, rotate r char, choices)) rotations)
-      pure (map (\(_, pipe, _) -> (set charL pipe continue, progress)) rotations)
-
-    filterDisconnected :: MonadIO m => [(Fursor, Pix, Choices)] -> m [(Fursor, Pix, Choices)]
-    filterDisconnected = filterM $ \(cur, pix, choices) -> do
-      disconnected <- pieceDead maze components cur pix choices
-      pure ((depth == size - 1) || not disconnected)
-
 {--- Meta solver ---}
-
--- | Progress.components = Components -> Components'
-componentRecalc :: MonadIO m => Bool -> Progress -> m Progress
-componentRecalc deep p@Progress{maze, continues} = do
-  comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
-  pure . (\c -> p { components = c }) $ if deep then Components' comps else Components (IntMap.map IntSet.size comps)
-  where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
 
 islandChoicesParallel :: Progress -> [MMaze] -> [Island] -> SolverT [Island]
 islandChoicesParallel p [copy] islands = for islands (islandChoices copy p)
@@ -1103,6 +1096,13 @@ solveBasic maze = do
     initSolve m@MMaze{level} n | n > 1 && 4 <= level =
       componentRecalc False =<< renderImage' "parallel" =<< solveDetParallel n m
     initSolve m _ = initProgress m
+
+    -- | Progress.components = Components -> Components'
+    componentRecalc :: MonadIO m => Bool -> Progress -> m Progress
+    componentRecalc deep p@Progress{maze, continues} = do
+      comps <- foldr (IntMap.unionWith IntSet.union) IntMap.empty <$> traverse component (IntMap.toList continues)
+      pure . (\c -> p { components = c }) $ if deep then Components' comps else Components (IntMap.map IntSet.size comps)
+      where component (_, Continue{origin, cursor}) = IntMap.singleton <$> partEquate maze origin <*> pure (IntSet.singleton cursor)
 
 solveIslandStatic :: Progress -> SolverT Progress
 solveIslandStatic p = do
