@@ -406,7 +406,7 @@ parse input = do
     (width, height) = (length (head rect), length rect)
     size = width * height
     zeros = floor (logBase 10 (fromIntegral size) + 1.5)
-    level = fromMaybe 0 (lookup width [(8,1), (25,2), (50,3), (200,4), (400,5), (1000,6)])
+    level = fromMaybe 7 (lookup size [(64,1), (500,2), (2_500,3), (20_000,4), (120_000,5), (1_000_000,6)])
 
     setDeltas m = V.thaw . V.fromList =<< traverse (\(fc, p) -> initChoicesL (const (choices m (fc, p))) p) board
     choices m (fc, _p) = do
