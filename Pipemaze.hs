@@ -176,11 +176,12 @@ import System.IO (hFlush, stdout)
 
 -- $bugs
 -- * `partId`/`origin` is a little awkward, but `pipe`/`char` is even more so
--- * Parallelism works but seems to make solving a little slower. Only mutable data is 'MMaze' and it seems to be handled correctly.
---  Almost all of the code for single-thread version is the same.
+-- * 'Continue's can be removed, if their old versions are added in 'Unwind's
+-- * A separate priority list could be mae for choices = 1
 -- * All 'IslandSolution's are getting recomputed after each determinstic solve, which can be fixed, but it's already very fast
 -- * 'IslandSolution' could be recomputable without running main solver,
 --  just by checking that nothing gets disconnected after running it through all the 'Unwind's of last solve.
+-- * Backtracking on 'IslandSolution' could be implemented
 -- * 'IslandSolution's could be chosen by just checking that the 'icConnections' connect some graph constructed from islands.
 -- * 'IslandSolution' could have a heuristic for the number of solutions without solving all
 --  solutions by solving in breadth-wise first choices – '[Progress]' and only then depth-wise.
@@ -308,6 +309,7 @@ solveWithHistory _ = False
 data Configuration = Configuration
   { cDebug :: Int
   , cDebugFreq :: Int
+  , cPixSize :: Int
   , cLifespan :: Int
   , cMode :: SolveMode
   , cBounds :: Bounds -- ^ forces the solver to stay within bounds
@@ -359,6 +361,7 @@ determinsticallyI = withReaderT (set cModeL SolveIslandDeterministic) -- for isl
 confDefault = Configuration
   { cDebug = 0
   , cDebugFreq = 10377
+  , cPixSize = 3
   , cLifespan = - 1
   , cMode = SolveNormal
   , cBounds = Nothing
@@ -511,16 +514,16 @@ renderStr :: MMaze -> IO String
 renderStr MMaze{board, width, height} =
   unlines . map (concatMap (return . toChar . pipe)) . vectorLists width height . V.convert <$> V.freeze board
 
-{- HLINT ignore renderImage -}
-renderImage :: MonadIO m => String -> MMaze -> Continues -> m ()
-renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
+{- HLINT ignore renderImageN -}
+renderImageN :: MonadIO m => Int -> String -> MMaze -> Continues -> m ()
+renderImageN pixSize fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
   mcanvas <- thaw canvas :: IO (MImage RealWorld VU RGB Double)
   traverse_ (drawPiece mcanvas) grid
   writeImage fn =<< freeze mcanvas
   where
-    (pw, ph) = (3, 3)
-    border = 3
-    canvas = makeImageR VU ((width + 2) * pw, (height + 2) * ph) $ const (PixelRGB 0 0 0)
+    (pixW, pixH) = (pixSize, pixSize)
+    border = pixSize
+    canvas = makeImageR VU ((width + 2) * pixW, (height + 2) * pixH) $ const (PixelRGB 0 0 0)
     grid = (,) <$> [0..width - 1] <*> [0..height - 1]
 
     colorHash :: Cursor -> Double
@@ -540,9 +543,20 @@ renderImage fn maze@MMaze{width, height} continues = liftIO $ seq continues $ do
       let satu = if solved then 0.8 else (if isJust cont then 0.8 else 0)
       let inte = if solved then 0.5 else (if isJust cont then 1 else 0.3)
       let fill = if not solved && pipe == 0b11111111 then PixelRGB 1 1 1 else toPixelRGB $ PixelHSI colo satu inte
-      write image (border + x * pw + 1, border + y * ph + 1) fill
-      for_ (pixDirections pipe) $ \d ->
-        when (Bit.testBit pipe d) $ write image (mazeDelta (border + x * pw + 1, border + y * ph + 1) d) fill
+      write' pixSize pipe fill
+
+      where
+        write' :: Int -> Pix -> Pixel RGB Double -> IO ()
+        write' 3 pipe fill = do
+          write image (border + x * pixW + 1, border + y * pixH + 1) fill
+          for_ (pixDirections pipe) $ \d ->
+            when (Bit.testBit pipe d) $
+              write image (mazeDelta (border + x * pixW + 1, border + y * pixH + 1) d) fill
+        write' 1 _ fill = write image (border + x * pixW, border + y * pixH) fill
+        write' _ _ _ = error "pixSize bad"
+
+renderImage :: String -> MMaze -> Continues -> SolverT ()
+renderImage s m c = asks cPixSize >>= \ps -> renderImageN ps s m c
 
 -- | The output format is: @images/lvl%i-%s-%0*i-%s.png level mazeId (sizeLen iter) name@
 renderImage' :: String -> Progress -> SolverT Progress
@@ -800,6 +814,7 @@ prioritizeDeltas width p@Progress{iter, maze} continue@Continue{cursor=cur, choi
 rescoreContinue :: Bounds -> Width -> Continue -> Continue
 rescoreContinue bounds width c@Continue{cursor, choices=choicesBits, island, area, created} = set scoreL score c
   where
+    -- score = choices + x + y -- interesting for animations for smaller levels
     score = (0 + bound << 34 - island << 27 + area << 15 + (choices << (12 - choicesCount)) + x + y) << 28 + created
     bound = if bounded bounds cursor then 0 else 1
     choices = choicesBits Bit..&. (0b11 << choicesCount)
@@ -1089,6 +1104,7 @@ initProgress m@MMaze{trivials} =
 -- | First deterministic, possibly parallel run-through solve stage.
 solveBasic :: MMaze -> SolverT Progress
 solveBasic maze = do
+  whenM (asks (not . cBench)) $ void . renderImage' "start" =<< initProgress maze
   p <- initSolve maze =<< asks cNumCap
   p <- componentRecalc True . fromJust =<< determinstically (solve' p)
   renderImage' "islandize" p
@@ -1188,12 +1204,12 @@ configuration :: MMaze -> IO Configuration
 configuration MMaze{mazeId, level} = do
   let mazeDir :: String = printf "lvl%i-%s" level mazeId
   imageDir :: String <- formatTime defaultTimeLocale ("images/%F-%H-%M-%S-" ++ mazeDir ++ "/") <$> getCurrentTime
-  conf <- cNumCapL (const getNumCapabilities) confDefault
-  conf <- set cBenchL "bench" =<< set cDebugL "debug" =<< set cDebugFreqL "freq" =<< pure conf { cImageDir = imageDir }
+  conf <- set cImageDirL imageDir <$> cNumCapL (const getNumCapabilities) confDefault
+  conf <- (s cBenchL "bench" <=< s cDebugL "debug" <=< s cDebugFreqL "freq" <=< s cPixSizeL "pix") conf
   (conf <$) . unless (cBench conf) $ createDirectoryIfMissing True imageDir
   where
-    set :: Read a => Setter' s a -> String -> s -> IO s
-    set setter env s = (\v' -> (setter %~ (`fromMaybe` (read <$> v'))) s) <$> lookupEnv env
+    s :: Read a => Setter' s a -> String -> s -> IO s
+    s setter env s = (\v' -> (setter %~ (`fromMaybe` (read <$> v'))) s) <$> lookupEnv env
 
 -- | Gets passwords for solved levels from the maze server.
 pļāpātArWebsocketu :: [Int] -> Bool -> WS.ClientApp ()
