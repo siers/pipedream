@@ -1068,7 +1068,7 @@ solveDetParallel n m@MMaze{width} = do
     mazeQuadrant :: MMaze -> Cursor -> Int
     mazeQuadrant MMaze{width} = uncurry (quadrant width) (coeff n)
       where
-        splits = [(1, (1, 1)), (2, (2, 1)), (4, (2, 2)), (6, (3, 3)), (8, (4, 2)), (12, (4, 3)), (16, (4, 4))]
+        splits = [(1, (1, 1)), (2, (2, 1)), (4, (2, 2)), (6, (3, 3)), (8, (4, 2)), (12, (4, 3)), (16, (4, 4)), (64, (8, 8))]
         coeff n = fromMaybe (error "define split for capabilities") (lookup n splits)
 
         -- | Returns a unique quadrant id for a 0-based n-size grid split into s*s quadrants
