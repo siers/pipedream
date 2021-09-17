@@ -601,7 +601,7 @@ traceBoard current progress@Progress{iter=iter', depth, maze=maze@MMaze{size}} =
       | iter `mod` freq == 0 && mode == 1 = liftIO $ renderStr maze >>= putStrLn
       | iter `mod` freq == 0 && mode == 2 = liftIO $ traceStr >>= putStrLn
       | iter `mod` freq == 0 && mode == 3 = liftIO $ traceStr >>= putStrLn . (clear ++)
-      | iter `mod` freq == 0 && mode == 4 = tracer 1 freq False >> void (renderImage' "trace" progress)
+      | iter `mod` freq == 0 && mode == 4 = tracer 0 freq False >> void (renderImage' "trace" progress)
       | iter `mod` freq == 0 && mode == 5 = if islandish then tracer 4 freq True else pure ()
       | otherwise = pure ()
 
