@@ -4,7 +4,16 @@ samples/      here are the samples
 problems/     tiny files for ironing out problems
 shell.nix     declares all dependencies in nix
 
-http://raitis.veinbahs.lv/maze/doc/Pipemaze.html
+presentation
+  https://www.youtube.com/watch?v=tqhWM-uTPjw
+
+documentation
+  http://raitis.veinbahs.lv/maze/doc/Pipemaze.html
+
+solve videos
+  http://raitis.veinbahs.lv/maze/content/
+
+--
 
 running
   nix-shell shell.nix --run 'ghc Main.hs -o solve && ./solve samples/2'
