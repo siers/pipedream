@@ -1,4 +1,6 @@
-with (import <nixpkgs> {});
+{ pkgs }:
+
+with pkgs;
 
 let
   haskellPackages' =
